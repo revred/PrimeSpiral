@@ -29,6 +29,8 @@ const checkDebug = document.getElementById('toggle-debug');
 const checkSq = document.getElementById('toggle-sq');
 const checkPow2 = document.getElementById('toggle-pow2');
 const checkPow10 = document.getElementById('toggle-pow10');
+const checkFiberEuler = document.getElementById('toggle-fiber-euler');
+const checkFiberLegendre = document.getElementById('toggle-fiber-legendre');
 const checkWarp = document.getElementById('toggle-warp');
 const sliderR0 = document.getElementById('warp-r0');
 const elR0 = document.getElementById('disp-r0');
@@ -106,6 +108,7 @@ function allocateBuffers(max) {
   cacheY = new Float32Array(maxNumber + 1);
   window.cacheX = cacheX;
   window.cacheY = cacheY;
+  fiberManager.init(max);
   invalidateSpriteCache();
 }
 allocateBuffers(2000000);
@@ -140,6 +143,48 @@ function createNoiseTexture() {
 // --- Profiler ---
 const btnProfile = document.getElementById('btn-profile');
 const elProfileResults = document.getElementById('disp-profile-results');
+
+// --- Fiber System ---
+// Quadratic form: n(k) = k^2 + k + C
+// Euler: C=41, Legendre: C=17
+class FiberManager {
+  constructor() {
+    this.fiberMap = null; // Uint8Array: 0=None, 1=Euler, 2=Legendre
+    this.fiberConfigs = {
+      'EULER': { C: 41, id: 1 },
+      'LEGENDRE': { C: 17, id: 2 }
+    };
+  }
+
+  init(max) {
+    this.fiberMap = new Uint8Array(max + 1);
+    this.rebuild('EULER');
+    this.rebuild('LEGENDRE');
+  }
+
+  rebuild(name) {
+    if (!this.fiberMap) return;
+    const config = this.fiberConfigs[name];
+    if (!config) return;
+    const C = config.C;
+    const id = config.id;
+    let k = 0;
+    while (true) {
+      const n = k * k + k + C;
+      if (n >= this.fiberMap.length) break;
+      this.fiberMap[n] = id;
+      k++;
+    }
+  }
+
+  isFiber(n, name) {
+    if (!this.fiberMap) return false;
+    const val = this.fiberMap[n];
+    if (val === 0) return false;
+    return val === this.fiberConfigs[name].id;
+  }
+}
+const fiberManager = new FiberManager();
 
 class Profiler {
   constructor() {
@@ -526,12 +571,17 @@ function renderPixelMode(visibleChunks) {
   const COL_SQUARE = 0xFFFFB84D;
   const COL_POW2 = 0xFFFF009D; // Purple ABGR
   const COL_POW10 = 0xFF00FF00; // Green ABGR
+  const COL_EULER = 0xFFFFFF00; // Cyan ABGR
+  const COL_LEGENDRE = 0xFF00FFFF; // Yellow ABGR
   const COL_COMP = 0xFF222222;
 
   let count = 0;
 
   const isPowerOfTwo = (n) => n > 0 && (n & (n - 1)) === 0;
   const isPowerOfTen = (n) => n === 10 || n === 100 || n === 1000 || n === 10000 || n === 100000 || n === 1000000;
+
+  const showEuler = checkFiberEuler ? checkFiberEuler.checked : false;
+  const showLegendre = checkFiberLegendre ? checkFiberLegendre.checked : false;
 
   // Helper to draw a 3x3 splat for milestones
   function splat(idx, color) {
@@ -558,7 +608,7 @@ function renderPixelMode(visibleChunks) {
         const idx = iy * w + ix;
         const current = buf32[idx];
 
-        // Priority Logic: P10 > P2 > Prime > Square
+        // Priority Logic: P10 > P2 > Fiber > Prime > Square
         if (isP10 && isPowerOfTen(i)) {
           splat(idx, COL_POW10);
           count++;
@@ -573,7 +623,23 @@ function renderPixelMode(visibleChunks) {
           continue;
         }
 
-        const isMilestone = (current === COL_POW10 || current === COL_POW2);
+        if (showEuler && fiberManager.isFiber(i, 'EULER')) {
+          if (current !== COL_POW10 && current !== COL_POW2) {
+            buf32[idx] = COL_EULER;
+            count++;
+          }
+          continue;
+        }
+
+        if (showLegendre && fiberManager.isFiber(i, 'LEGENDRE')) {
+          if (current !== COL_POW10 && current !== COL_POW2) {
+            buf32[idx] = COL_LEGENDRE;
+            count++;
+          }
+          continue;
+        }
+
+        const isMilestone = (current === COL_POW10 || current === COL_POW2 || current === COL_EULER || current === COL_LEGENDRE);
 
         if (primeMap[i] === 1) {
           if (!isMilestone) {
@@ -609,7 +675,17 @@ function renderPixelMode(visibleChunks) {
         continue;
       }
 
-      const isMilestone = (current === COL_POW10 || current === COL_POW2);
+      if (showEuler && fiberManager.isFiber(i, 'EULER')) {
+        if (current !== COL_POW10 && current !== COL_POW2) { buf32[idx] = COL_EULER; count++; }
+        continue;
+      }
+
+      if (showLegendre && fiberManager.isFiber(i, 'LEGENDRE')) {
+        if (current !== COL_POW10 && current !== COL_POW2) { buf32[idx] = COL_LEGENDRE; count++; }
+        continue;
+      }
+
+      const isMilestone = (current === COL_POW10 || current === COL_POW2 || current === COL_EULER || current === COL_LEGENDRE);
       if (primeMap[i] === 1) {
         if (!isMilestone) { buf32[idx] = COL_PRIME; count++; }
       } else if (isSq && Number.isInteger(Math.sqrt(i))) {
@@ -733,6 +809,54 @@ function renderVectorMode(visibleChunks) {
     ctx.fill();
   }
 
+  // --- Draw Parametric Fiber Curves (Overlay) ---
+  const PI2 = Math.PI * 2;
+  const drawParametricFiber = (fiberName, colorHex) => {
+    const config = fiberManager.fiberConfigs[fiberName];
+    if (!config) return;
+    const C = config.C;
+
+    ctx.strokeStyle = colorHex;
+    ctx.lineWidth = 1.5 / scale;
+    ctx.beginPath();
+
+    // We trace k from 0 to where n > maxNumber
+    // Optimization: Only trace segments visible in viewport? 
+    // For now, trace all, performance is fine for Vector mode (usually zoomed in)
+    // Or trace roughly based on visible range
+
+    const kMax = Math.floor(Math.sqrt(maxNumber)); // rough bound
+    let first = true;
+
+    for (let k = 0; k <= kMax; k += 0.1) {
+      const n = k * k + k + C;
+      if (n > maxNumber) break;
+
+      // Convert polar to spiral coords
+      const root = Math.sqrt(n);
+      const r = root * SPACING;
+      const theta = root * PI2;
+      // Apply warp if needed
+      const R0 = +sliderR0.value;
+      const useWarp = checkWarp.checked;
+      const rw = useWarp ? warpR(r, R0) : r;
+
+      const x = -Math.cos(theta) * rw;
+      const y = Math.sin(theta) * rw;
+
+      if (first) {
+        ctx.moveTo(x, y);
+        first = false;
+      } else {
+        ctx.lineTo(x, y);
+      }
+    }
+    ctx.stroke();
+  };
+
+  if (showEuler) drawParametricFiber('EULER', '#00ffff');
+  if (showLegendre) drawParametricFiber('LEGENDRE', '#ffff00');
+
   ctx.fillStyle = "rgba(255,255,255,0.15)";
   ctx.beginPath();
   for (const chunk of visibleChunks) {
@@ -855,8 +979,17 @@ function updateTooltipContent(n, isPrime) {
     if (isPowerOfTwo(n)) {
       html += `<br><span style="color:#9d00ff; font-weight:bold;">Power of 2 (${Math.log2(n).toFixed(0)})</span>`;
     }
+    if (isPowerOfTwo(n)) {
+      html += `<br><span style="color:#9d00ff; font-weight:bold;">Power of 2 (${Math.log2(n).toFixed(0)})</span>`;
+    }
     if (isPowerOfTen(n)) {
       html += `<br><span style="color:#00ff00; font-weight:bold;">Power of 10 ($10^{Math.log10(n).toFixed(0)}$)</span>`;
+    }
+    if (fiberManager.isFiber(n, 'EULER')) {
+      html += `<br><span style="color:#00ffff; font-weight:bold;">Euler Fiber ($n^2+n+41$)</span>`;
+    }
+    if (fiberManager.isFiber(n, 'LEGENDRE')) {
+      html += `<br><span style="color:#ffff00; font-weight:bold;">Legendre Fiber ($n^2+n+17$)</span>`;
     }
   }
   if (infoPanel) infoPanel.innerHTML = html;
@@ -942,6 +1075,8 @@ checkDebug.addEventListener('change', () => requestAnimationFrame(draw));
 checkSq.addEventListener('change', () => requestAnimationFrame(draw));
 if (checkPow2) checkPow2.addEventListener('change', () => requestAnimationFrame(draw));
 if (checkPow10) checkPow10.addEventListener('change', () => requestAnimationFrame(draw));
+if (checkFiberEuler) checkFiberEuler.addEventListener('change', () => requestAnimationFrame(draw));
+if (checkFiberLegendre) checkFiberLegendre.addEventListener('change', () => requestAnimationFrame(draw));
 checkWarp.addEventListener('change', () => updateCache());
 
 let sliderTimeout = null;
