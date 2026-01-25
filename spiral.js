@@ -27,6 +27,8 @@ const elStrategy = document.getElementById('disp-strategy');
 const checkGrid = document.getElementById('toggle-grid');
 const checkDebug = document.getElementById('toggle-debug');
 const checkSq = document.getElementById('toggle-sq');
+const checkPow2 = document.getElementById('toggle-pow2');
+const checkPow10 = document.getElementById('toggle-pow10');
 const checkWarp = document.getElementById('toggle-warp');
 const sliderR0 = document.getElementById('warp-r0');
 const elR0 = document.getElementById('disp-r0');
@@ -514,14 +516,32 @@ function renderPixelMode(visibleChunks) {
   buf32.fill(0xFF0D0D0D);
 
   const isSq = checkSq.checked;
+  const isP2 = checkPow2 ? checkPow2.checked : false;
+  const isP10 = checkPow10 ? checkPow10.checked : false;
+
   const tx = offsetX + centerX;
   const ty = offsetY + centerY;
 
   const COL_PRIME = 0xFF3333FF;
   const COL_SQUARE = 0xFFFFB84D;
+  const COL_POW2 = 0xFFFF009D; // Purple ABGR
+  const COL_POW10 = 0xFF00FF00; // Green ABGR
   const COL_COMP = 0xFF222222;
 
   let count = 0;
+
+  const isPowerOfTwo = (n) => n > 0 && (n & (n - 1)) === 0;
+  const isPowerOfTen = (n) => n === 10 || n === 100 || n === 1000 || n === 10000 || n === 100000 || n === 1000000;
+
+  // Helper to draw a 3x3 splat for milestones
+  function splat(idx, color) {
+    buf32[idx] = color;
+    // Bounds checking for neighbors
+    if ((idx + 1) % w !== 0 && idx + 1 < buf32.length) buf32[idx + 1] = color;
+    if (idx % w !== 0 && idx - 1 >= 0) buf32[idx - 1] = color;
+    if (idx + w < buf32.length) buf32[idx + w] = color;
+    if (idx - w >= 0) buf32[idx - w] = color;
+  }
 
   // Use visibleChunks if provided for massive speedup
   if (visibleChunks) {
@@ -536,13 +556,35 @@ function renderPixelMode(visibleChunks) {
         const ix = (px * dpr) | 0;
         const iy = (py * dpr) | 0;
         const idx = iy * w + ix;
+        const current = buf32[idx];
+
+        // Priority Logic: P10 > P2 > Prime > Square
+        if (isP10 && isPowerOfTen(i)) {
+          splat(idx, COL_POW10);
+          count++;
+          continue;
+        }
+
+        if (isP2 && isPowerOfTwo(i)) {
+          if (current !== COL_POW10) {
+            splat(idx, COL_POW2);
+            count++;
+          }
+          continue;
+        }
+
+        const isMilestone = (current === COL_POW10 || current === COL_POW2);
 
         if (primeMap[i] === 1) {
-          buf32[idx] = COL_PRIME;
-          count++;
+          if (!isMilestone) {
+            buf32[idx] = COL_PRIME;
+            count++;
+          }
         } else if (isSq && Number.isInteger(Math.sqrt(i))) {
-          buf32[idx] = COL_SQUARE;
-          count++;
+          if (!isMilestone) {
+            buf32[idx] = COL_SQUARE;
+            count++;
+          }
         }
       }
     }
@@ -555,8 +597,24 @@ function renderPixelMode(visibleChunks) {
       const ix = (px * dpr) | 0;
       const iy = (py * dpr) | 0;
       const idx = iy * w + ix;
-      if (primeMap[i] === 1) { buf32[idx] = COL_PRIME; count++; }
-      else if (isSq && Number.isInteger(Math.sqrt(i))) { buf32[idx] = COL_SQUARE; count++; }
+      const current = buf32[idx];
+
+      if (isP10 && isPowerOfTen(i)) {
+        splat(idx, COL_POW10);
+        count++;
+        continue;
+      }
+      if (isP2 && isPowerOfTwo(i)) {
+        if (current !== COL_POW10) { splat(idx, COL_POW2); count++; }
+        continue;
+      }
+
+      const isMilestone = (current === COL_POW10 || current === COL_POW2);
+      if (primeMap[i] === 1) {
+        if (!isMilestone) { buf32[idx] = COL_PRIME; count++; }
+      } else if (isSq && Number.isInteger(Math.sqrt(i))) {
+        if (!isMilestone) { buf32[idx] = COL_SQUARE; count++; }
+      }
     }
   }
 
@@ -575,6 +633,11 @@ function renderVectorMode(visibleChunks) {
   const dotSize = 1.2 / scale;
   const isGrid = checkGrid.checked;
   const isSq = checkSq.checked;
+  const isP2 = checkPow2 ? checkPow2.checked : false;
+  const isP10 = checkPow10 ? checkPow10.checked : false;
+
+  const isPowerOfTwo = (n) => n > 0 && (n & (n - 1)) === 0;
+  const isPowerOfTen = (n) => n === 10 || n === 100 || n === 1000 || n === 10000 || n === 100000 || n === 1000000;
 
   if (checkDebug.checked) {
     ctx.lineWidth = 1 / scale;
@@ -632,6 +695,38 @@ function renderVectorMode(visibleChunks) {
             ctx.rect(cacheX[i] - sz / 2, cacheY[i] - sz / 2, sz, sz);
             count++;
           }
+        }
+      }
+    }
+    ctx.fill();
+  }
+
+  if (isP2) {
+    ctx.fillStyle = "#9d00ff";
+    ctx.beginPath();
+    for (const chunk of visibleChunks) {
+      for (let k = 0; k < chunk.length; k++) {
+        const i = chunk[k];
+        if (isPowerOfTwo(i)) {
+          const sz = dotSize * 2.5;
+          ctx.rect(cacheX[i] - sz / 2, cacheY[i] - sz / 2, sz, sz);
+          count++;
+        }
+      }
+    }
+    ctx.fill();
+  }
+
+  if (isP10) {
+    ctx.fillStyle = "#00ff00";
+    ctx.beginPath();
+    for (const chunk of visibleChunks) {
+      for (let k = 0; k < chunk.length; k++) {
+        const i = chunk[k];
+        if (isPowerOfTen(i)) {
+          const sz = dotSize * 3.5;
+          ctx.rect(cacheX[i] - sz / 2, cacheY[i] - sz / 2, sz, sz);
+          count++;
         }
       }
     }
@@ -754,6 +849,15 @@ function updateTooltipContent(n, isPrime) {
     if (Number.isInteger(root)) {
       html += `<br><span style="color:#4db8ff">Perfect Square (${root}²)</span>`;
     }
+    const isPowerOfTwo = (n) => n > 0 && (n & (n - 1)) === 0;
+    const isPowerOfTen = (n) => n === 10 || n === 100 || n === 1000 || n === 10000 || n === 100000 || n === 1000000;
+
+    if (isPowerOfTwo(n)) {
+      html += `<br><span style="color:#9d00ff; font-weight:bold;">Power of 2 (${Math.log2(n).toFixed(0)})</span>`;
+    }
+    if (isPowerOfTen(n)) {
+      html += `<br><span style="color:#00ff00; font-weight:bold;">Power of 10 ($10^{Math.log10(n).toFixed(0)}$)</span>`;
+    }
   }
   if (infoPanel) infoPanel.innerHTML = html;
 }
@@ -836,6 +940,8 @@ window.addEventListener('mousemove', (e) => {
 checkGrid.addEventListener('change', () => requestAnimationFrame(draw));
 checkDebug.addEventListener('change', () => requestAnimationFrame(draw));
 checkSq.addEventListener('change', () => requestAnimationFrame(draw));
+if (checkPow2) checkPow2.addEventListener('change', () => requestAnimationFrame(draw));
+if (checkPow10) checkPow10.addEventListener('change', () => requestAnimationFrame(draw));
 checkWarp.addEventListener('change', () => updateCache());
 
 let sliderTimeout = null;

@@ -55,6 +55,8 @@ For detailed verification strategy, see: [Automation Strategy](file:///c:/Code/P
 ✅ **Hover tooltip** — snaps to nearest visible number  
 ✅ **Grid toggle** — draw line segments between successive points  
 ✅ **Squares highlight** — perfect squares show up as blue anchors  
+✅ **Powers of 2** — marked in **Purple** (High Priority)
+✅ **Powers of 10** — marked in **Green** (Top Priority)
 ✅ **NEW: Origin compression (Warp)** — shrinks the near-zero region so you can explore further out with less “wasted space”
 
 ## Run
