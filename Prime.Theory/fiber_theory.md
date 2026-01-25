@@ -41,4 +41,17 @@ Where $\phi$ is the "winding angle" (rotation).
     *   User clicks 2 or 3 primes.
     *   System solves for $(A, B, C)$.
     *   System draws the Fiber.
-    *   System highlights the *next* integer intersection on that Fiber (The Prediction).
+## 5. Dynamic Fiber Discovery (The "FiberMarker" Algo)
+Start treating primes not as static points, but as "poles" in a magnetic field. We want to trace the "Flux Lines" connecting them.
+
+**Algorithm: `traceFibers()`**
+1.  **Seed**: Start at a prime $P_i$.
+2.  **Lookahead**: Search for the nearest prime $P_j$ ($j > i$) within a "Search Cone" (Directional Bias).
+3.  **Momentum**: If we came from $P_{prev}$, the vector $\vec{v} = P_i - P_{prev}$ defines our bias. We prefer $P_j$ such that $\vec{u} = P_j - P_i \approx \vec{v}$ (Smooth curvature).
+4.  **Link**: Create a segment $P_i \to P_j$.
+
+**Prediction (Skip List)**
+Once a chain $P_1 \to P_2 \to \dots \to P_k$ is formed:
+1.  Fit a local quadratic $n(t) = At^2 + Bt + C$.
+2.  Extrapolate to $t_{k+1}$.
+3.  Mark this location as a "Phantom Node" (Prediction).

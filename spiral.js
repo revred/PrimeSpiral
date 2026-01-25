@@ -11,6 +11,15 @@
 
 const canvas = document.getElementById('canvas');
 const ctx = canvas.getContext('2d', { alpha: false });
+
+// --- ROBUST FIBER MANAGER STUB ---
+// Ensures the app never crashes even if fiber.js fails to load.
+const fiberManager = window.fiberManager || {
+  init: () => console.warn("FiberManager missing: init skipped"),
+  isFiber: () => false,
+  fiberConfigs: {}
+};
+
 const canvasOverlay = document.getElementById('canvas-overlay');
 const ctxOverlay = canvasOverlay.getContext('2d');
 const infoPanel = document.getElementById('info-content');
@@ -108,10 +117,13 @@ function allocateBuffers(max) {
   cacheY = new Float32Array(maxNumber + 1);
   window.cacheX = cacheX;
   window.cacheY = cacheY;
-  fiberManager.init(max);
+
+  if (fiberManager && typeof fiberManager.init === 'function') {
+    fiberManager.init(max);
+  }
+
   invalidateSpriteCache();
 }
-allocateBuffers(2000000);
 
 // --- Assets ---
 let noiseTexture = null;
@@ -143,48 +155,6 @@ function createNoiseTexture() {
 // --- Profiler ---
 const btnProfile = document.getElementById('btn-profile');
 const elProfileResults = document.getElementById('disp-profile-results');
-
-// --- Fiber System ---
-// Quadratic form: n(k) = k^2 + k + C
-// Euler: C=41, Legendre: C=17
-class FiberManager {
-  constructor() {
-    this.fiberMap = null; // Uint8Array: 0=None, 1=Euler, 2=Legendre
-    this.fiberConfigs = {
-      'EULER': { C: 41, id: 1 },
-      'LEGENDRE': { C: 17, id: 2 }
-    };
-  }
-
-  init(max) {
-    this.fiberMap = new Uint8Array(max + 1);
-    this.rebuild('EULER');
-    this.rebuild('LEGENDRE');
-  }
-
-  rebuild(name) {
-    if (!this.fiberMap) return;
-    const config = this.fiberConfigs[name];
-    if (!config) return;
-    const C = config.C;
-    const id = config.id;
-    let k = 0;
-    while (true) {
-      const n = k * k + k + C;
-      if (n >= this.fiberMap.length) break;
-      this.fiberMap[n] = id;
-      k++;
-    }
-  }
-
-  isFiber(n, name) {
-    if (!this.fiberMap) return false;
-    const val = this.fiberMap[n];
-    if (val === 0) return false;
-    return val === this.fiberConfigs[name].id;
-  }
-}
-const fiberManager = new FiberManager();
 
 class Profiler {
   constructor() {
@@ -811,7 +781,13 @@ function renderVectorMode(visibleChunks) {
 
   // --- Draw Parametric Fiber Curves (Overlay) ---
   const PI2 = Math.PI * 2;
+  const checkFiberEuler = document.getElementById('toggle-fiber-euler');
+  const checkFiberLegendre = document.getElementById('toggle-fiber-legendre');
+  const showEuler = checkFiberEuler ? checkFiberEuler.checked : false;
+  const showLegendre = checkFiberLegendre ? checkFiberLegendre.checked : false;
+
   const drawParametricFiber = (fiberName, colorHex) => {
+    if (!fiberManager.fiberConfigs) return;
     const config = fiberManager.fiberConfigs[fiberName];
     if (!config) return;
     const C = config.C;
@@ -819,11 +795,6 @@ function renderVectorMode(visibleChunks) {
     ctx.strokeStyle = colorHex;
     ctx.lineWidth = 1.5 / scale;
     ctx.beginPath();
-
-    // We trace k from 0 to where n > maxNumber
-    // Optimization: Only trace segments visible in viewport? 
-    // For now, trace all, performance is fine for Vector mode (usually zoomed in)
-    // Or trace roughly based on visible range
 
     const kMax = Math.floor(Math.sqrt(maxNumber)); // rough bound
     let first = true;
@@ -979,9 +950,6 @@ function updateTooltipContent(n, isPrime) {
     if (isPowerOfTwo(n)) {
       html += `<br><span style="color:#9d00ff; font-weight:bold;">Power of 2 (${Math.log2(n).toFixed(0)})</span>`;
     }
-    if (isPowerOfTwo(n)) {
-      html += `<br><span style="color:#9d00ff; font-weight:bold;">Power of 2 (${Math.log2(n).toFixed(0)})</span>`;
-    }
     if (isPowerOfTen(n)) {
       html += `<br><span style="color:#00ff00; font-weight:bold;">Power of 10 ($10^{Math.log10(n).toFixed(0)}$)</span>`;
     }
@@ -1087,6 +1055,7 @@ sliderR0.addEventListener('input', () => {
 });
 
 function init() {
+  allocateBuffers(maxNumber); // Initialize buffers now
   if (elMax) elMax.value = maxNumber;
   elR0.innerText = sliderR0.value;
   requestAnimationFrame(() => {
