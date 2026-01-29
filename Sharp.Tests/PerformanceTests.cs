@@ -15,7 +15,7 @@ namespace Sharp.Tests
             // Navigate up to solution root -> spike.html
             // Or absolute path C:/Code/PrimeSpiral/spike.html
             // Let's use absolute for robustness in this environment
-            return "file:///C:/Code/PrimeSpiral/spike.html";
+            return "file:///C:/Code/PrimeSpiral/index.html";
         }
 
         [Test]

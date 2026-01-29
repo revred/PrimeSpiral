@@ -180,8 +180,9 @@ namespace Sharp.Tests
                     scale: parseFloat(document.getElementById('dbg-zoom')?.innerText || '0'),
                     visible: parseInt((document.getElementById('disp-visible')?.innerText || '0').replace(/,/g, ''), 10),
                     strategy: document.getElementById('dbg-strategy-val')?.innerText || 'N/A',
-                    offsetX: window.offsetX,
-                    offsetY: window.offsetY
+                    strategy: document.getElementById('dbg-strategy-val')?.innerText || 'N/A',
+                    offsetX: window.camera ? window.camera.renderOffset.x : 0,
+                    offsetY: window.camera ? window.camera.renderOffset.y : 0
                 };
             }");
 
