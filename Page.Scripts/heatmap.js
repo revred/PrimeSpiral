@@ -27,6 +27,13 @@ class HeatmapLayer {
         this.rBins = rBins;
         this.thetaBins = thetaBins;
         this.maxR = maxR;
+
+        // Auto-Scale Threshold if signal is weak
+        if (this.maxZ > 0 && this.maxZ < this.threshold) {
+            console.log(`[Heatmap] Signal weak (MaxZ=${maxZ.toFixed(2)}). Lowering threshold.`);
+            this.threshold = this.maxZ * 0.4;
+        }
+
         this.rebuildActiveBins();
     }
 
@@ -76,67 +83,39 @@ class HeatmapLayer {
                 });
             }
         }
-        console.log(`[Heatmap] Rebuilt. Active Bins: ${this.activeBins.length} (Threshold: ${this.threshold})`);
+        // console.log(`[Heatmap] Rebuilt. Active Bins: ${this.activeBins.length}`);
     }
 
     render(scale, centerX, centerY, offsetX, offsetY, spacing, R0, useWarp) {
-        if (!this.visible || !this.activeBins.length) return;
+        if (!this.visible) return;
+        if (!this.activeBins.length) {
+            // Rate limit logs?
+            if (Math.random() < 0.01) console.log("[Heatmap] Render called but no active bins.");
+            return;
+        }
 
         const ctx = this.ctx;
         const tx = offsetX + centerX;
         const ty = offsetY + centerY;
 
-        // Batch by color? No, pre-baked strings.
-        // Optimization: screen bounds check?
-        // rVal * spacing * scale is screen radius approx.
+        // console.log(`[Heatmap] Rendering ${this.activeBins.length} bins. Ctr(${centerX},${centerY}) Off(${offsetX},${offsetY}) Scale: ${scale}`);
 
         const PI2 = Math.PI * 2;
 
-        // We draw ARC SEGMENTS.
-        // Screen X = -cos(theta) * radius
-        // Screen Y = sin(theta) * radius
-        // radius = warpR(rVal * spacing)
-
-        // Optimization: Use lineWidth for radial thickness?
-        // Arc length: tMin to tMax.
-
         ctx.globalCompositeOperation = 'screen';
-
         const warp = (r) => (r * r) / (r + R0);
+
+        let drawnCount = 0;
 
         for (const bin of this.activeBins) {
             const rBase = bin.rVal * spacing;
             const radius = useWarp ? warp(rBase) : rBase;
 
-            // Check bounds roughly
-            // If radius * scale is massive or tiny?
-
-            const alpha = bin.tVal; // theta is actually related to r in Sacks, but here it's Polar Grid theta.
-            // Wait. The Worker computed Theta as (root * 2PI) % 2PI.
-            // This is the Polar Angle in the Sacks embedding.
-            // So we draw at angle bin.tVal.
-
-            // Mapping:
-            // X = -cos(theta) * radius
-            // Y = sin(theta) * radius
-            // Canvas arc uses (x,y, radius, startAngle, endAngle).
-            // startAngle = -PI (for cos) + bin.tMin ??
-            // Sacks def: x = -cos(t), y = sin(t). 
-            // Canvas arc reference: 0 is +X, PI/2 is +Y.
-            // x = r cos(A), y = r sin(A).
-            // We have -cos(t) = cos(PI-t)? No. cos(t + PI).
-            // y = sin(t).
-            // So CanvasAngle = PI - t ? Or t + PI?
-            // cos(PI+t) = -cos(t). sin(PI+t) = -sin(t). NO.
-            // angle = PI - t.
-            // cos(PI-t) = -cos(t). sin(PI-t) = sin(t). YES.
+            // Simple culling
+            // if (radius * scale > 5000) continue; // Screen check?
 
             const startAngle = Math.PI - bin.tMax;
             const endAngle = Math.PI - bin.tMin;
-
-            // Note: tMax > tMin, so start < end? Or winding?
-            // PI - tMax is SMALLER than PI - tMin.
-            // counterclockwise: false.
 
             // Thickness:
             const rInnerBase = bin.rMin * spacing;
@@ -147,13 +126,22 @@ class HeatmapLayer {
             const thickness = Math.max(1, rOuter - rInner);
             const midR = (rInner + rOuter) / 2;
 
+            // Only draw if visible on screen roughly
+            // x = midR * cos(angle) + tx
+            // Check if midR + tx is within canvas bounds logic?
+            // Skip for now to assume logic is sound
+
             ctx.beginPath();
             ctx.strokeStyle = bin.color;
             ctx.lineWidth = thickness;
             // Ensure Arc draws strictly the segment
             ctx.arc(tx, ty, midR, startAngle, endAngle, false);
             ctx.stroke();
+            drawnCount++;
         }
+
+        // Console log once per second-ish or if it changes drastically? 
+        // console.log(`[Heatmap] Drew ${drawnCount} bins.`);
 
         ctx.globalCompositeOperation = 'source-over';
     }

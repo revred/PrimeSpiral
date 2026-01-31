@@ -44,60 +44,79 @@ const inputHandler = new InputHandler(canvasOverlay, camera, () => {
   let searchRad = 50 / camera.renderScale;
   if (searchRad < 10) searchRad = 10;
 
-  // 1. Find Nearest Prime
-  // Query grid around mouse
-  const query = grid.queryPrimes(wx - searchRad, wy - searchRad, wx + searchRad, wy + searchRad);
-
-  let minDist = Infinity;
-  let nearest = null;
-
-  for (const chunk of query.chunks) {
-    for (const idx of chunk) {
-      const dx = cacheX[idx] - wx;
-      const dy = cacheY[idx] - wy;
-      const d2 = dx * dx + dy * dy;
-      if (d2 < minDist) {
-        minDist = d2;
-        nearest = idx;
-      }
-    }
+  // 1. Find Nearest Prime (WASM Accelerated)
+  // Async check - fire and forget, update on resolve
+  if (window.wasmEngine && window.wasmEngine.isReady) {
+    window.wasmEngine.getNearest(wx, wy, searchRad).then(nearestId => {
+      processHover(nearestId, wx, wy);
+    });
+  } else {
+    // Fallback or wait
+    return;
   }
 
-  // Threshold Check
-  const screenDist = Math.sqrt(minDist) * camera.renderScale;
-  const SNAP_DIST = 50; // Increased hit area for better usability
+  // NOTE: Logic moved to processHover to handle async result
+  /*
+  const query = grid.queryPrimes(wx - searchRad, wy - searchRad, wx + searchRad, wy + searchRad);
+  let minDist = Infinity;
+  let nearest = null;
+  for (const chunk of query.chunks) { ... } 
+  */
+  return; // Skip sync logic
 
-  if (nearest && screenDist < SNAP_DIST) {
-    // DENSITY CHECK: Distance to neighbors
-    // If P_n and P_n+1 are closer than PEARL_THRESHOLD px, don't show pearls
-    const idxInList = primeList.indexOf(nearest);
-    let tooDense = false;
-    if (idxInList > 0) {
-      const prev = primeList[idxInList - 1];
-      const dp = Math.hypot(cacheX[nearest] - cacheX[prev], cacheY[nearest] - cacheY[prev]) * camera.renderScale;
-      if (dp < PEARL_THRESHOLD) tooDense = true;
+  function processHover(nearest, wx, wy) {
+    if (elementHovered) return; // Don't process if hovering UI (stub)
+
+    // Recalculate dist for threshold check (WASM returns ID, we need exact screen dist)
+    // nearest is the ID or -1
+    if (nearest === -1) nearest = null;
+
+    let minDist = Infinity;
+    if (nearest !== null) {
+      const dx = cacheX[nearest] - wx;
+      const dy = cacheY[nearest] - wy;
+      minDist = dx * dx + dy * dy;
     }
+    // Continue with existing logic...
 
-    if (!tooDense) {
-      if (hoveredPrime !== nearest) {
-        hoveredPrime = nearest;
-        // Find K-Neighbors
-        hoveredNeighbors = findKNearestNeighbors(nearest, K_NEIGHBORS);
-        requestAnimationFrame(drawOverlay);
+
+    // Threshold Check
+    const screenDist = Math.sqrt(minDist) * camera.renderScale;
+    const SNAP_DIST = 50; // Increased hit area for better usability
+
+    if (nearest && screenDist < SNAP_DIST) {
+      // DENSITY CHECK: Distance to neighbors
+      // If P_n and P_n+1 are closer than PEARL_THRESHOLD px, don't show pearls
+      const idxInList = primeList.indexOf(nearest);
+      let tooDense = false;
+      if (idxInList > 0) {
+        const prev = primeList[idxInList - 1];
+        const dp = Math.hypot(cacheX[nearest] - cacheX[prev], cacheY[nearest] - cacheY[prev]) * camera.renderScale;
+        if (dp < PEARL_THRESHOLD) tooDense = true;
+      }
+
+      if (!tooDense) {
+        if (hoveredPrime !== nearest) {
+          hoveredPrime = nearest;
+          // Find K-Neighbors
+          hoveredNeighbors = findKNearestNeighbors(nearest, K_NEIGHBORS);
+          requestAnimationFrame(drawOverlay);
+        }
+      } else {
+        // Cleared because too dense
+        if (hoveredPrime !== null) {
+          hoveredPrime = null;
+          requestAnimationFrame(drawOverlay);
+        }
       }
     } else {
-      // Cleared because too dense
+      // Not near any prime
       if (hoveredPrime !== null) {
         hoveredPrime = null;
         requestAnimationFrame(drawOverlay);
       }
     }
-  } else {
-    // Not near any prime
-    if (hoveredPrime !== null) {
-      hoveredPrime = null;
-      requestAnimationFrame(drawOverlay);
-    }
+
   }
 
   // Debug Mouse
@@ -180,13 +199,14 @@ function findKNearestNeighbors(centerIdx, k) {
 
 // --- Data Store ---
 // --- CONTENT ---
-let primeMap;
-let cacheX;
-let cacheY;
-let maxNumber = 2000000;
-let minNumber = 0; // New: Hollow Center
+// --- CONTENT ---
+var primeMap;
+var cacheX;
+var cacheY;
+var maxNumber = 2000000;
+var minNumber = 0; // New: Hollow Center
 const SPACING = 1;
-const CHUNK_SIZE = 100;
+// CHUNK_SIZE moved to spatialGrid.js
 const SAFETY_LIMIT = 50000;
 const K_NEIGHBORS = 5;
 const PEARL_THRESHOLD = 15; // Minimum pixel distance for visualization activation
@@ -358,115 +378,7 @@ const sliderR0 = document.getElementById('warp-r0');
 const elR0 = document.getElementById('disp-r0');
 const checkHeatmap = document.getElementById('toggle-heatmap');
 
-// --- GRID ---
-class SpiralGrid {
-  constructor() {
-    this.chunks = new Map();
-    this.primeChunks = new Map();
-    this.minX = 0; this.maxX = 0;
-    this.minY = 0; this.maxY = 0;
-  }
-
-  clear() {
-    this.chunks.clear();
-    this.primeChunks.clear();
-  }
-
-  get bounds() {
-    return {
-      minX: this.minX,
-      maxX: this.maxX,
-      minY: this.minY,
-      maxY: this.maxY
-    };
-  }
-
-  build() {
-    this.clear();
-    const tempBuffer = new Map();
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-
-    // Start construction from minNumber to respect Hollow Center
-    for (let i = minNumber; i <= maxNumber; i++) {
-      const x = cacheX[i];
-      const y = cacheY[i];
-
-      if (x < minX) minX = x;
-      if (x > maxX) maxX = x;
-      if (y < minY) minY = y;
-      if (y > maxY) maxY = y;
-
-      const kx = Math.floor(x / CHUNK_SIZE);
-      const ky = Math.floor(y / CHUNK_SIZE);
-      const key = (ky << 16) | (kx & 0xFFFF);
-
-      let list = tempBuffer.get(key);
-      if (!list) {
-        list = [];
-        tempBuffer.set(key, list);
-      }
-      list.push(i);
-    }
-
-    this.minX = minX; this.maxX = maxX;
-    this.minY = minY; this.maxY = maxY;
-
-    for (const [key, list] of tempBuffer) {
-      this.chunks.set(key, new Int32Array(list));
-
-      // Filter for Primes Only
-      const pList = [];
-      for (let id of list) {
-        if (primeMap[id]) pList.push(id);
-      }
-      if (pList.length > 0) this.primeChunks.set(key, new Int32Array(pList));
-    }
-  }
-
-  query(rLeft, rTop, rRight, rBottom) {
-    const startKX = Math.floor(rLeft / CHUNK_SIZE);
-    const endKX = Math.floor(rRight / CHUNK_SIZE);
-    const startKY = Math.floor(rTop / CHUNK_SIZE);
-    const endKY = Math.floor(rBottom / CHUNK_SIZE);
-
-    const results = [];
-    let totalPoints = 0;
-
-    for (let ky = startKY; ky <= endKY; ky++) {
-      for (let kx = startKX; kx <= endKX; kx++) {
-        const key = (ky << 16) | (kx & 0xFFFF);
-        const chunk = this.chunks.get(key);
-        if (chunk) {
-          results.push(chunk);
-          totalPoints += chunk.length;
-        }
-      }
-    }
-    return { chunks: results, count: totalPoints };
-  }
-
-  queryPrimes(rLeft, rTop, rRight, rBottom) {
-    const startKX = Math.floor(rLeft / CHUNK_SIZE);
-    const endKX = Math.floor(rRight / CHUNK_SIZE);
-    const startKY = Math.floor(rTop / CHUNK_SIZE);
-    const endKY = Math.floor(rBottom / CHUNK_SIZE);
-
-    const results = [];
-    let totalPoints = 0;
-
-    for (let ky = startKY; ky <= endKY; ky++) {
-      for (let kx = startKX; kx <= endKX; kx++) {
-        const key = (ky << 16) | (kx & 0xFFFF);
-        const chunk = this.primeChunks.get(key);
-        if (chunk) {
-          results.push(chunk);
-          totalPoints += chunk.length;
-        }
-      }
-    }
-    return { chunks: results, count: totalPoints };
-  }
-}
+// Grid logic moved to spatialGrid.js
 
 const grid = new SpiralGrid();
 
@@ -564,6 +476,12 @@ function updateCache() {
   // Not strictly needed if grid.build loop is also updated, which is efficient.
 
   grid.build();
+  // Sync WASM Grid
+  if (window.wasmEngine && window.wasmEngine.isReady) {
+    window.wasmEngine.buildGrid(maxNumber).then(() => {
+      console.log("[Spiral] WASM Grid Synced");
+    });
+  }
   updateWarpGraph();
   if (elProfileResults) elProfileResults.innerText = "Ready.";
   if (heatmapLayer && heatmapLayer.zGrid === null) triggerAnalysis();
@@ -1405,20 +1323,36 @@ function triggerAnalysis() {
 
     console.log(`[Analysis] Triggering: N=${maxNumber.toLocaleString()} -> Grid ${rBins}x${tBins}`);
 
-    // UI State: ANALYZING
-    if (typeof elDetectorBtnText !== 'undefined' && elDetectorBtnText) elDetectorBtnText.innerText = "ANALYZING...";
-    if (typeof elDetectorProgress !== 'undefined' && elDetectorProgress) {
-      elDetectorProgress.classList.add('indeterminate');
-      elDetectorProgress.style.width = "100%";
-    }
-    // Update new button
-    if (typeof btnRunDiscovery !== 'undefined' && btnRunDiscovery) {
-      btnRunDiscovery.style.color = "#888"; // Dim logic
-      // Maybe spin?
-      btnRunDiscovery.classList.add('spin');
-    }
+    // UI Feedback
+    if (typeof elDetectorStatus !== 'undefined' && elDetectorStatus) elDetectorStatus.innerText = "Status: Computing via WASM...";
+    if (typeof btnRunDiscovery !== 'undefined' && btnRunDiscovery) btnRunDiscovery.classList.add('spin');
 
-    analysisWorker.postMessage({ maxNumber, rBins: rBins, thetaBins: tBins });
+    // Call WASM
+    // Use setTimeout to allow UI to render the "Computing" state
+    setTimeout(async () => {
+      try {
+        if (window.wasmEngine && window.wasmEngine.isReady) {
+          const zGrid = await window.wasmEngine.getDensityMap(maxNumber, rBins, tBins);
+          if (zGrid) {
+            // Find MaxZ for normalization (C# didn't return it, so we calc fast here or just iterate)
+            let maxZ = 0;
+            for (let val of zGrid) if (val > maxZ) maxZ = val;
+            const maxR = Math.sqrt(maxNumber);
+
+            heatmapLayer.updateData(zGrid, maxZ, rBins, tBins, maxR);
+            requestAnimationFrame(drawOverlay);
+
+            if (elDetectorStatus) elDetectorStatus.innerText = "Status: Analysis Ready";
+          }
+        } else {
+          console.error("WASM Engine not ready");
+        }
+      } catch (e) {
+        console.error("WASM Density Error", e);
+      } finally {
+        if (typeof btnRunDiscovery !== 'undefined' && btnRunDiscovery) btnRunDiscovery.classList.remove('spin');
+      }
+    }, 10);
   }
 }
 
@@ -1768,6 +1702,85 @@ function draw(timestamp) {
 
 }
 
+// --- UI SETUP (Moved from index.html) ---
+function setupUI() {
+  // --- MIN NUMBER ---
+  const inpMin = document.getElementById('inp-min');
+
+  function formatNumber(num) {
+    return num.toLocaleString();
+  }
+  function parseNumber(str) {
+    return parseInt(str.replace(/,/g, ''), 10) || 0;
+  }
+
+  function updateMinUI() {
+    if (inpMin) inpMin.value = formatNumber(minNumber);
+    if (window.updateMinNumber) window.updateMinNumber(minNumber); // This is defined where? in index? No, actually window.updateMinNumber was calls to spiral.. wait. 
+    // Actually spiral.js IS where updateMinNumber/updateMaxNumber logic resides usually.
+    // If those were defined in spiral.js properly, we can call them directly.
+    if (typeof updateMinNumber === 'function') updateMinNumber(minNumber);
+  }
+
+  if (inpMin) {
+    // Init
+    inpMin.value = formatNumber(minNumber);
+
+    document.getElementById('btn-dec-min-1k')?.addEventListener('click', () => {
+      minNumber = Math.max(0, minNumber - 1000);
+      updateMinUI();
+    });
+    document.getElementById('btn-dec-min-100')?.addEventListener('click', () => {
+      minNumber = Math.max(0, minNumber - 100);
+      updateMinUI();
+    });
+    document.getElementById('btn-inc-min-100')?.addEventListener('click', () => {
+      minNumber += 100;
+      updateMinUI();
+    });
+    document.getElementById('btn-inc-min-1k')?.addEventListener('click', () => {
+      minNumber += 1000;
+      updateMinUI();
+    });
+    inpMin.addEventListener('change', () => {
+      let val = parseNumber(inpMin.value);
+      if (val < 0) val = 0;
+      minNumber = val;
+      updateMinUI();
+    });
+  }
+
+  // --- MAX NUMBER ---
+  const inpMax = document.getElementById('inp-max');
+  if (inpMax) {
+    // Init
+    inpMax.value = formatNumber(maxNumber);
+
+    function updateMaxUI() {
+      inpMax.value = formatNumber(maxNumber);
+      if (typeof updateMaxNumber === 'function') updateMaxNumber(maxNumber);
+    }
+
+    document.getElementById('btn-dec-100k')?.addEventListener('click', () => {
+      maxNumber = Math.max(1000, maxNumber - 100000);
+      updateMaxUI();
+    });
+    document.getElementById('btn-dec-10k')?.addEventListener('click', () => {
+      maxNumber = Math.max(1000, maxNumber - 10000);
+      updateMaxUI();
+    });
+    document.getElementById('btn-inc-10k')?.addEventListener('click', () => {
+      maxNumber += 10000;
+      updateMaxUI();
+    });
+    document.getElementById('btn-inc-100k')?.addEventListener('click', () => {
+      maxNumber += 100000;
+      updateMaxUI();
+    });
+  }
+}
+
 // Start
 init();
+setupUI();
 

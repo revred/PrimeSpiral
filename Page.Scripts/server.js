@@ -13,6 +13,12 @@ const mimeTypes = {
     '.jpg': 'image/jpg',
     '.gif': 'image/gif',
     '.svg': 'image/svg+xml',
+    '.wasm': 'application/wasm',
+    '.dll': 'application/octet-stream',
+    '.pdb': 'application/octet-stream',
+    '.blat': 'application/octet-stream',
+    '.dat': 'application/octet-stream',
+
 };
 
 http.createServer(function (request, response) {

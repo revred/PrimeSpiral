@@ -1,0 +1,78 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <title>SpiralGrid Isolation Test</title>
+</head>
+
+<body>
+    <h1>SpiralGrid Isolation Test</h1>
+    <div id="results"></div>
+
+    <!-- MOCK DEPENDENCIES -->
+    <script>
+        // Global variables expected by SpiralGrid
+        const minNumber = 0;
+        const maxNumber = 1000;
+        const cacheX = new Float32Array(maxNumber + 1);
+        const cacheY = new Float32Array(maxNumber + 1);
+        const primeMap = new Uint8Array(maxNumber + 1);
+
+        // Populate mocks
+        for (let i = 0; i <= maxNumber; i++) {
+            // Simple mock layout: diagonal line
+            cacheX[i] = i;
+            cacheY[i] = i;
+            // Mark every 2nd as query target for test
+            if (i % 2 === 0) primeMap[i] = 1;
+        }
+    </script>
+
+    <!-- LOAD TARGET SCRIPT -->
+    <script src="../Page.Scripts/spatialGrid.js"></script>
+
+    <!-- RUN TESTS -->
+    <script>
+        function log(msg, success) {
+            const div = document.createElement('div');
+            div.textContent = msg;
+            div.style.color = success ? 'green' : 'red';
+            document.body.appendChild(div);
+            // console.log(msg); // Reduced noise
+            return success;
+        }
+
+        try {
+            log("Test 1: Instantiation", true);
+            const grid = new SpiralGrid();
+
+            log("Test 2: Build()", true);
+            grid.build();
+
+            log(`Test 3: Chunk Creation`, true);
+            if (grid.chunks.size > 0) log("  Passed: Chunks created", true);
+            else log("  Failed: No chunks created", false);
+
+            log(`Test 4: Prime Filtering`, true);
+            if (grid.primeChunks.size > 0) log("  Passed: Prime chunks created", true);
+            else log("  Failed: No prime chunks", false);
+
+            log("Test 5: Query", true);
+            // Query region 0,0 to 200,200 (should cover first few chunks)
+            const result = grid.query(0, 0, 200, 200);
+            if (result.count > 0) log(`  Passed: Query returned ${result.count} points`, true);
+            else log("  Failed: Query returned 0 points", false);
+
+            log("All Tests Completed", true);
+            window.testStatus = "DONE";
+
+        } catch (e) {
+            log("CRITICAL FAILURE: " + e.message, false);
+            console.error(e);
+            window.testStatus = "ERROR";
+        }
+    </script>
+</body>
+
+</html>

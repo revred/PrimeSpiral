@@ -1,4 +1,5 @@
 <Solution>
   <Project Path="Sharp.Benchmark/Sharp.Benchmark.csproj" />
+  <Project Path="Sharp.Primer/Sharp.Primer.csproj" />
   <Project Path="Sharp.Tests/Sharp.Tests.csproj" />
 </Solution>
