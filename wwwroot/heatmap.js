@@ -30,8 +30,8 @@ class HeatmapLayer {
 
         // Auto-Scale Threshold if signal is weak
         if (this.maxZ > 0 && this.maxZ < this.threshold) {
-            console.log(`[Heatmap] Signal weak (MaxZ=${maxZ.toFixed(2)}). Lowering threshold.`);
-            this.threshold = this.maxZ * 0.4;
+            console.log(`[Heatmap] Signal weak (MaxZ=${maxZ.toFixed(2)}). Lowering threshold to ${maxZ * 0.5}`);
+            this.threshold = this.maxZ * 0.5;
         }
 
         this.rebuildActiveBins();

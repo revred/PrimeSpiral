@@ -112,6 +112,65 @@ namespace Sharp.Primer
             return nearestId;
         }
 
+        public struct RenderPoint
+        {
+            public int Id { get; set; }
+            public double X { get; set; }
+            public double Y { get; set; }
+        }
+
+        [JSInvokable("GetNeighbors")]
+        public static RenderPoint[] GetNeighbors(int centerId, int count)
+        {
+             // Optimization: Re-calculate X/Y from ID (Sacks Spiral is deterministic!)
+            double root = Math.Sqrt(centerId);
+            double theta = root * 2 * Math.PI;
+            double cx = root * Math.Cos(theta);
+            double cy = -root * Math.Sin(theta);
+            
+            double searchRadius = 50.0 + (root * 0.5); // Heuristic radius
+            
+            int minKX = (int)Math.Floor((cx - searchRadius) / CHUNK_SIZE);
+            int maxKX = (int)Math.Floor((cx + searchRadius) / CHUNK_SIZE);
+            int minKY = (int)Math.Floor((cy - searchRadius) / CHUNK_SIZE);
+            int maxKY = (int)Math.Floor((cy + searchRadius) / CHUNK_SIZE);
+
+            var neighbors = new List<(int id, double x, double y, double distSq)>();
+
+            for (int ky = minKY; ky <= maxKY; ky++)
+            {
+                for (int kx = minKX; kx <= maxKX; kx++)
+                {
+                    int key = (ky << 16) | (kx & 0xFFFF);
+                    if (_primeChunks.TryGetValue(key, out var list))
+                    {
+                        foreach (var p in list)
+                        {
+                            // Include center in list for rendering? Usually neighbors means *other* points.
+                            // But for rendering the "Cluster" we might want the center too.
+                            // Let's stick to neighbors exclude center.
+                            if (p.Id == centerId) continue;
+                            
+                            double dx = p.X - cx;
+                            double dy = p.Y - cy;
+                            double dSq = dx * dx + dy * dy;
+                            
+                            if (dSq < searchRadius * searchRadius)
+                            {
+                                neighbors.Add((p.Id, p.X, p.Y, dSq));
+                            }
+                        }
+                    }
+                }
+            }
+            
+            // Return top K sorted by distance
+            return neighbors.OrderBy(n => n.distSq)
+                            .Take(count)
+                            .Select(n => new RenderPoint { Id = n.id, X = n.x, Y = n.y })
+                            .ToArray();
+        }
+
         [JSInvokable("GetDensityMap")]
         public static float[] GetDensityMap(int maxNumber, int rBins, int thetaBins)
         {
@@ -188,6 +247,49 @@ namespace Sharp.Primer
                 // In case of error, return empty array
                 return Array.Empty<float>();
             }
+        }
+        // --- BENCHMARKS ---
+
+        [JSInvokable("BenchmarkGrid")]
+        public static string BenchmarkGrid(int limit)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            BuildGrid(limit);
+            sw.Stop();
+            return $"[Benchmark] BuildGrid({limit}): {sw.Elapsed.TotalMilliseconds:F2} ms. Chunks: {_chunks.Count}";
+        }
+
+        [JSInvokable("BenchmarkQuery")]
+        public static string BenchmarkQuery(int count, double maxDist)
+        {
+            if (_chunks.Count == 0) return "Error: Grid not built.";
+            
+            var rand = new Random(123); // Fixed seed
+            double queryRange = 5000; // Arbitrary coordinate range
+
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            int hits = 0;
+            
+            for(int i=0; i<count; i++)
+            {
+                double x = (rand.NextDouble() * 2 - 1) * queryRange;
+                double y = (rand.NextDouble() * 2 - 1) * queryRange;
+                int res = GetNearest(x, y, maxDist);
+                if (res != -1) hits++;
+            }
+            
+            sw.Stop();
+            double avg = sw.Elapsed.TotalMilliseconds / count;
+            return $"[Benchmark] {count} Queries: {sw.Elapsed.TotalMilliseconds:F2} ms (Avg: {avg:F4} ms/op). Hits: {hits}";
+        }
+
+        [JSInvokable("BenchmarkDensity")]
+        public static string BenchmarkDensity(int maxNumber, int rBins, int thetaBins)
+        {
+            var sw = System.Diagnostics.Stopwatch.StartNew();
+            var map = GetDensityMap(maxNumber, rBins, thetaBins);
+            sw.Stop();
+            return $"[Benchmark] DensityMap({maxNumber}, {rBins}x{thetaBins}): {sw.Elapsed.TotalMilliseconds:F2} ms. MapSize: {map.Length}";
         }
     }
 }

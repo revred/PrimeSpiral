@@ -46,16 +46,38 @@ window.wasmEngine = {
         return await DotNet.invokeMethodAsync('Sharp.Primer', 'GetNearest', x, y, maxDist);
     },
 
+    getNeighbors: async function (centerId, count) {
+        if (!this.isReady) return [];
+        return await DotNet.invokeMethodAsync('Sharp.Primer', 'GetNeighbors', centerId, count);
+    },
+
     getDensityMap: async function (maxNumber, rBins, thetaBins) {
         if (!this.isReady) {
             console.warn("WASM not ready for Density Map");
             return null;
         }
-        const startTime = performance.now();
-        const zGrid = await DotNet.invokeMethodAsync('Sharp.Primer', 'GetDensityMap', maxNumber, rBins, thetaBins);
-        const time = performance.now() - startTime;
-        console.log(`[WASM] Density Map (size ${zGrid.length}) computed in ${time.toFixed(0)}ms`);
-        return zGrid;
+        // Direct call without benchmark logging here, usage is shifted to C# benchmark or internal logs
+        return await DotNet.invokeMethodAsync('Sharp.Primer', 'GetDensityMap', maxNumber, rBins, thetaBins);
+    },
+
+    // --- Benchmarks ---
+    runBenchmarks: async function () {
+        if (!this.isReady) return "WASM Not Ready";
+        let results = [];
+
+        console.log("Running C# Benchmarks...");
+
+        // 1. Grid Build
+        results.push(await DotNet.invokeMethodAsync('Sharp.Primer', 'BenchmarkGrid', 100000));
+
+        // 2. Query
+        results.push(await DotNet.invokeMethodAsync('Sharp.Primer', 'BenchmarkQuery', 1000, 50.0));
+
+        // 3. Density
+        results.push(await DotNet.invokeMethodAsync('Sharp.Primer', 'BenchmarkDensity', 100000, 200, 360));
+
+        console.table(results);
+        return results;
     },
 
     test: async function () {
@@ -81,10 +103,10 @@ window.wasmEngine = {
 
         try {
             Blazor.start({
-                // Redirect resource loading to Page.Scripts/_framework
+                // Redirect resource loading to wwwroot/_framework
                 loadBootResource: function (type, name, defaultUri, integrity) {
                     // console.log(`Loading: ${type} ${name}`); 
-                    return `Page.Scripts/_framework/${name}`;
+                    return `wwwroot/_framework/${name}`;
                 }
             }).then(() => {
                 console.log("WASM: Blazor started successfully");

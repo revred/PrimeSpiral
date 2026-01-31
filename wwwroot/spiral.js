@@ -8,7 +8,169 @@ const ctx = canvas.getContext('2d', { alpha: false });
 
 const canvasOverlay = document.getElementById('canvas-overlay');
 const ctxOverlay = canvasOverlay.getContext('2d');
+// --- GLOBAL GRID CLASS (Restored for JS Interop) ---
+class SpiralGrid {
+  constructor() {
+    this.cellSize = 100;
+    this.chunks = new Map();
+    this.primeChunks = new Map();
+  }
+
+  // Simple Spatial Hash
+  key(x, y) {
+    const kx = Math.floor(x / this.cellSize);
+    const ky = Math.floor(y / this.cellSize);
+    return `${kx},${ky}`;
+  }
+
+  build() {
+    console.log("[SpiralGrid] Building JS Spatial Index...");
+    this.chunks.clear();
+    this.primeChunks.clear();
+
+    // Safety check for cache
+    if (!cacheX || !cacheY) return;
+
+    for (let i = minNumber; i <= maxNumber; i++) {
+      const x = cacheX[i];
+      const y = cacheY[i];
+      const k = this.key(x, y);
+
+      // All Points Chunk
+      if (!this.chunks.has(k)) this.chunks.set(k, []);
+      this.chunks.get(k).push(i);
+
+      // Primes Chunk (Optimization for pixel mode)
+      if (primeMap[i] === 1) {
+        if (!this.primeChunks.has(k)) this.primeChunks.set(k, []);
+        this.primeChunks.get(k).push(i);
+      }
+    }
+    console.log(`[SpiralGrid] Built. Keys: ${this.chunks.size}`);
+  }
+
+  // Standard Query (Returns everything, draw loop filters)
+  query(minX, minY, maxX, maxY) {
+    const kxMin = Math.floor(minX / this.cellSize);
+    const kxMax = Math.floor(maxX / this.cellSize);
+    const kyMin = Math.floor(minY / this.cellSize);
+    const kyMax = Math.floor(maxY / this.cellSize);
+
+    const result = { chunks: [], count: 0 };
+
+    for (let ky = kyMin; ky <= kyMax; ky++) {
+      for (let kx = kxMin; kx <= kxMax; kx++) {
+        const k = `${kx},${ky}`;
+        const chunk = this.chunks.get(k);
+        if (chunk) {
+          result.chunks.push(chunk);
+          result.count += chunk.length;
+        }
+      }
+    }
+    return result;
+  }
+
+  // Prime Only Query (For Bit-Blit)
+  queryPrimes(minX, minY, maxX, maxY) {
+    const kxMin = Math.floor(minX / this.cellSize);
+    const kxMax = Math.floor(maxX / this.cellSize);
+    const kyMin = Math.floor(minY / this.cellSize);
+    const kyMax = Math.floor(maxY / this.cellSize);
+
+    const result = { chunks: [], count: 0 };
+
+    for (let ky = kyMin; ky <= kyMax; ky++) {
+      for (let kx = kxMin; kx <= kxMax; kx++) {
+        const k = `${kx},${ky}`;
+        const chunk = this.primeChunks.get(k);
+        if (chunk) {
+          result.chunks.push(chunk);
+          result.count += chunk.length;
+        }
+      }
+    }
+    return result;
+  }
+
+  // JS Fallback for Nearest Neighbor
+  getNearest(x, y, maxDist) {
+    const kx = Math.floor(x / this.cellSize);
+    const ky = Math.floor(y / this.cellSize);
+    const searchRad = Math.ceil(maxDist / this.cellSize);
+
+    let bestDistSq = maxDist * maxDist;
+    let bestId = -1;
+
+    for (let dy = -searchRad; dy <= searchRad; dy++) {
+      for (let dx = -searchRad; dx <= searchRad; dx++) {
+        const k = `${kx + dx},${ky + dy}`;
+        const chunk = this.primeChunks.get(k); // Only search primes
+        if (chunk) {
+          for (let id of chunk) {
+            const px = cacheX[id];
+            const py = cacheY[id];
+            const dSq = (px - x) * (px - x) + (py - y) * (py - y);
+            if (dSq < bestDistSq) {
+              bestDistSq = dSq;
+              bestId = id;
+            }
+          }
+        }
+      }
+    }
+    return bestId;
+  }
+
+  // JS Fallback for Neighbors
+  getNeighbors(centerId, count) {
+    if (centerId < 0 || centerId > maxNumber) return [];
+    const cx = cacheX[centerId];
+    const cy = cacheY[centerId];
+    // Reuse getNearest logic but find top K
+    // Simplification: Just find points in nearby chunks and sort
+
+    const searchDist = 100; // Fixed search area for neighbors
+    const kx = Math.floor(cx / this.cellSize);
+    const ky = Math.floor(cy / this.cellSize);
+
+    let candidates = [];
+
+    for (let dy = -1; dy <= 1; dy++) {
+      for (let dx = -1; dx <= 1; dx++) {
+        const k = `${kx + dx},${ky + dy}`;
+        const chunk = this.primeChunks.get(k);
+        if (chunk) {
+          for (let id of chunk) {
+            if (id === centerId) continue;
+            const px = cacheX[id];
+            const py = cacheY[id];
+            const dSq = (px - cx) * (px - cx) + (py - cy) * (py - cy);
+            if (dSq < searchDist * searchDist) {
+              candidates.push({ id: id, x: px, y: py, distSq: dSq });
+            }
+          }
+        }
+      }
+    }
+
+    return candidates.sort((a, b) => a.distSq - b.distSq).slice(0, count);
+  }
+}
+
+// --- GLOBAL GRID (Init First) ---
+let grid = new SpiralGrid();
+const SPACING = 1;
+const K_NEIGHBORS = 5;
+const SAFETY_LIMIT = 50000;
+const PEARL_THRESHOLD = 15;
+let hoveredPrime = null;
+let hoveredNeighbors = [];
+let noiseTexture = null;
+
+
 const infoPanel = document.getElementById('info-content');
+
 
 // --- MODULES ---
 // 1. Fiber Manager Stub
@@ -28,15 +190,10 @@ const inputHandler = new InputHandler(canvasOverlay, camera, () => {
   requestAnimationFrame(drawOverlay);
 
   // --- MOUSE HOVER LOGIC (Prime Pearls) ---
-  if (!grid || !cacheX) {
-    if (Math.random() < 0.05) console.log("[InputHandler] Early Return: Grid/Cache Missing", !!grid, !!cacheX);
-    return;
-  }
+  // Bypass (!grid) check because we use WASM now
 
   const wx = window.mouseWorldX;
   const wy = window.mouseWorldY;
-  // DEBUG
-  if (Math.random() < 0.05) console.log(`[Input] wx:${wx.toFixed(1)} wy:${wy.toFixed(1)} Scale:${camera.renderScale}`);
 
   // Performance Check: Only run if mouse moved significantly or scale allows
   // Use expanding radius search on Grid
@@ -44,84 +201,113 @@ const inputHandler = new InputHandler(canvasOverlay, camera, () => {
   let searchRad = 50 / camera.renderScale;
   if (searchRad < 10) searchRad = 10;
 
-  // 1. Find Nearest Prime (WASM Accelerated)
-  // Async check - fire and forget, update on resolve
+  // 1. Find Nearest Prime (Prefer WASM, Fallback to JS)
   if (window.wasmEngine && window.wasmEngine.isReady) {
     window.wasmEngine.getNearest(wx, wy, searchRad).then(nearestId => {
-      processHover(nearestId, wx, wy);
+      if (nearestId !== -1) {
+        window.wasmEngine.getNeighbors(nearestId, K_NEIGHBORS).then(neighbors => {
+          processHover(nearestId, neighbors, wx, wy);
+        });
+      } else {
+        processHover(null, [], wx, wy);
+      }
     });
   } else {
-    // Fallback or wait
-    return;
+    // --- JS FALLBACK ---
+    // console.log("Using JS Fallback for Hover");
+    const nearestId = grid.getNearest(wx, wy, searchRad);
+    if (nearestId !== -1) {
+      const neighbors = grid.getNeighbors(nearestId, K_NEIGHBORS);
+      processHover(nearestId, neighbors, wx, wy);
+    } else {
+      processHover(null, [], wx, wy);
+    }
   }
 
-  // NOTE: Logic moved to processHover to handle async result
-  /*
-  const query = grid.queryPrimes(wx - searchRad, wy - searchRad, wx + searchRad, wy + searchRad);
-  let minDist = Infinity;
-  let nearest = null;
-  for (const chunk of query.chunks) { ... } 
-  */
-  return; // Skip sync logic
+  function processHover(nearest, neighbors, wx, wy) {
+    // If elementHovered logic exists, handle it (assuming global or removed)
 
-  function processHover(nearest, wx, wy) {
-    if (elementHovered) return; // Don't process if hovering UI (stub)
+    // Logic:
+    // If nearest is valid, set hoveredPrime = nearest
+    // Set hoveredNeighbors = neighbors
+    // Call drawOverlay()
 
-    // Recalculate dist for threshold check (WASM returns ID, we need exact screen dist)
-    // nearest is the ID or -1
-    if (nearest === -1) nearest = null;
+    // Threshold Check (WASM returns nearest regardless of distance inside maxDist)
+    // We double check distance here?
+    let isValid = false;
 
-    let minDist = Infinity;
-    if (nearest !== null) {
-      const dx = cacheX[nearest] - wx;
-      const dy = cacheY[nearest] - wy;
-      minDist = dx * dx + dy * dy;
-    }
-    // Continue with existing logic...
+    if (nearest !== null && nearest !== -1) {
+      // We need X/Y of nearest to check distance exactly? 
+      // We have cacheX/cacheY in JS? 
+      // YES: cacheX and cacheY are Float32Arrays generated in JS 'allocateBuffers'
+      // 'allocateBuffers' runs on 'initPrimes'. 
+      // Assuming cacheX is valid.
 
+      if (cacheX && cacheX.length > nearest) {
+        const dx = cacheX[nearest] - wx;
+        const dy = cacheY[nearest] - wy;
+        const distSq = dx * dx + dy * dy;
+        const screenDist = Math.sqrt(distSq) * camera.renderScale;
 
-    // Threshold Check
-    const screenDist = Math.sqrt(minDist) * camera.renderScale;
-    const SNAP_DIST = 50; // Increased hit area for better usability
-
-    if (nearest && screenDist < SNAP_DIST) {
-      // DENSITY CHECK: Distance to neighbors
-      // If P_n and P_n+1 are closer than PEARL_THRESHOLD px, don't show pearls
-      const idxInList = primeList.indexOf(nearest);
-      let tooDense = false;
-      if (idxInList > 0) {
-        const prev = primeList[idxInList - 1];
-        const dp = Math.hypot(cacheX[nearest] - cacheX[prev], cacheY[nearest] - cacheY[prev]) * camera.renderScale;
-        if (dp < PEARL_THRESHOLD) tooDense = true;
+        if (screenDist < 50) { // SNAP DIST
+          isValid = true;
+        }
       }
+    }
 
-      if (!tooDense) {
-        if (hoveredPrime !== nearest) {
-          hoveredPrime = nearest;
-          // Find K-Neighbors
-          hoveredNeighbors = findKNearestNeighbors(nearest, K_NEIGHBORS);
-          requestAnimationFrame(drawOverlay);
-        }
-      } else {
-        // Cleared because too dense
-        if (hoveredPrime !== null) {
-          hoveredPrime = null;
-          requestAnimationFrame(drawOverlay);
-        }
+    if (isValid) {
+      if (hoveredPrime !== nearest) {
+        hoveredPrime = nearest;
+        hoveredNeighbors = neighbors; // WASM returned array
+        requestAnimationFrame(drawOverlay);
       }
     } else {
-      // Not near any prime
       if (hoveredPrime !== null) {
         hoveredPrime = null;
+        hoveredNeighbors = [];
         requestAnimationFrame(drawOverlay);
       }
     }
-
   }
 
   // Debug Mouse
   if (dbgMouse) dbgMouse.innerText = `${wx.toFixed(0)}, ${wy.toFixed(0)}`;
 });
+
+// --- HELPER: JIT Position Calculation ---
+function getPrimePos(n) {
+  // Sacks Spiral Formula
+  // r = sqrt(n), theta = sqrt(n) * 2pi
+  // x = r * cos(theta), y = -r * sin(theta) // Note: Y flip in canvas usually
+  // spiral.js generation:
+  // cacheX[i] = -Math.cos(theta) * rw; // Wait, let's match exact logic from updateCache
+
+  // Original updateCache logic:
+  // root = Math.sqrt(i)
+  // theta = root * 2 * PI
+  // x = root * Math.cos(theta)  <-- Wait, line 457 says -Math.cos?
+  // Let's check line 457 in view above: cacheX[i] = -Math.cos(theta) * rw;
+
+  // We must match exactly.
+  const root = Math.sqrt(n);
+  const theta = root * Math.PI * 2;
+  // Assuming SPACING = 1 and No Warp for basic match
+  const r = root;
+
+  // NOTE: If Warp is active, this visual position might be slightly off vs the Grid (which is unwarped?)
+  // Actually, GridEngine builds unwarped. 
+  // This visualization should match the Grid.
+
+  return {
+    x: root * Math.cos(theta),  // Standard Polar
+    y: -root * Math.sin(theta) // Standard Polar (Screen Y is down, so -sin is up)
+  };
+  // Note: The previous cacheX logic had a negative sign? 
+  // Line 457: cacheX[i] = -Math.cos(theta) * rw; 
+  // This implies a rotation or flip. 
+  // I will stick to what the GridEngine uses: x = root * cos, y = -root * sin.
+}
+
 
 // Shift Key State
 let isShiftPressed = false;
@@ -149,72 +335,19 @@ function getAngleDiff(a1, a2) {
   return diff;
 }
 
-function findKNearestNeighbors(centerIdx, k) {
-  const cx = cacheX[centerIdx];
-  const cy = cacheY[centerIdx];
-  // Search Radius
-  const radius = Math.sqrt(centerIdx) * 0.5 + 50;
-  const query = grid.queryPrimes(cx - radius, cy - radius, cx + radius, cy + radius);
-
-  // Collect all candidates
-  const candidates = [];
-  for (const chunk of query.chunks) {
-    for (const idx of chunk) {
-      if (idx === centerIdx) continue;
-      const dx = cacheX[idx] - cx;
-      const dy = cacheY[idx] - cy;
-      const dist = dx * dx + dy * dy;
-      const angle = Math.atan2(dy, dx);
-      candidates.push({ id: idx, dist: dist, angle: angle });
-    }
-  }
-
-  // Sort by distance
-  candidates.sort((a, b) => a.dist - b.dist);
-
-  // Filter by Angle (Occlusion/Sector)
-  // Only accept if angle diff > threshold from ALL previously accepted
-  const accepted = [];
-  const ANG_THRESHOLD = 0.25; // ~15 degrees
-
-  for (const cand of candidates) {
-    if (accepted.length >= k) break;
-
-    // Check angle against accepted
-    let duplicateDirection = false;
-    for (const acc of accepted) {
-      if (getAngleDiff(cand.angle, acc.angle) < ANG_THRESHOLD) {
-        duplicateDirection = true;
-        break;
-      }
-    }
-
-    if (!duplicateDirection) {
-      accepted.push(cand);
-    }
-  }
-
-  return accepted.map(c => c.id);
-}
+// OLD findKNearestNeighbors REMOVED (Replaced by WASM)
 
 // --- Data Store ---
-// --- CONTENT ---
-// --- CONTENT ---
 var primeMap;
-var cacheX;
-var cacheY;
+var cacheX; // Legacy Support Only
+var cacheY; // Legacy Support Only
 var maxNumber = 2000000;
 var minNumber = 0; // New: Hollow Center
-const SPACING = 1;
-// CHUNK_SIZE moved to spatialGrid.js
-const SAFETY_LIMIT = 50000;
-const K_NEIGHBORS = 5;
-const PEARL_THRESHOLD = 15; // Minimum pixel distance for visualization activation
-let hoveredPrime = null;
-let hoveredNeighbors = [];
+// SPACING declared at top
 
-// --- Assets ---
-let noiseTexture = null; // Unused but kept for compatibility
+// Constants declared at top
+let heatmapLayer = null;
+let detectedFibres = [];
 
 // --- Profiler ---
 const btnProfile = document.getElementById('btn-profile-hud');
@@ -307,6 +440,118 @@ const profiler = new Profiler();
 window.startProfile = (d) => profiler.start(d);
 window.stopProfile = () => profiler.stop();
 
+function drawOverlay() {
+  // console.log("[drawOverlay] Called");
+  // Use Physical Clear (Robust)
+  const dpr = window.devicePixelRatio || 1;
+  ctxOverlay.save();
+  ctxOverlay.setTransform(1, 0, 0, 1, 0, 0); // Identity
+  ctxOverlay.clearRect(0, 0, canvasOverlay.width, canvasOverlay.height);
+  ctxOverlay.restore(); // Restore dpr scale set in resize()
+
+  // --- HOVER / INSPECTOR LOGIC ---
+  // Uses global `hoveredPrime` set by InputHandler
+
+  const inspector = document.getElementById('inspector-content');
+
+  if (hoveredPrime !== null) {
+    const pH = hoveredPrime;
+    // const isPrime = primeMap[pH] === 1; // map might be missing
+    const isPrime = true; // For now, we only search primes in grid
+
+    // Build Inspector HTML
+    let html = `
+      <div style="display:flex; justify-content:space-between; align-items:baseline;">
+        <span style="font-size:18px; color:#fff; font-weight:bold;">${pH.toLocaleString()}</span>
+        <span style="font-size:10px; color:${isPrime ? '#ff3333' : '#666'}; border:1px solid ${isPrime ? '#ff3333' : '#444'}; padding:1px 3px; border-radius:2px;">
+            ${isPrime ? 'PRIME' : 'COMPOSITE'}
+        </span>
+      </div>
+    `;
+
+    // Properties
+    let props = [];
+    if (Math.log10(pH) % 1 === 0) props.push(`<span style="color:#00ff00;">Power of 10</span>`);
+    if ((pH & (pH - 1)) === 0) props.push(`<span style="color:#aa00ff;">Power of 2</span>`);
+    if (Math.sqrt(pH) % 1 === 0) props.push(`<span style="color:#4db8ff;">Perfect Square</span>`);
+
+    if (props.length > 0) {
+      html += `<div style="margin-top:4px; font-size:10px; line-height:1.4;">${props.join('<br>')}</div>`;
+    } else {
+      html += `<div style="margin-top:4px; font-size:10px; color:#444;">No special properties</div>`;
+    }
+
+    if (inspector) inspector.innerHTML = html;
+
+    // --- PEARL RENDERING (Overlay) ---
+    const scale = camera.renderScale;
+    const cx = camera.centerX;
+    const cy = camera.centerY;
+    const ox = camera.renderOffset.x;
+    const oy = camera.renderOffset.y;
+
+    // We need to transform to world space for rendering relative to camera
+    ctxOverlay.save();
+    ctxOverlay.translate(cx + ox, cy + oy);
+    ctxOverlay.scale(scale, scale);
+
+    // JIT Calc for Position (Fixing broken cacheX)
+    // FIX: Use cacheX/Y directly to match main render (Warp + Sign fix)
+    const xH = cacheX[pH];
+    const yH = cacheY[pH];
+
+    // Draw Center
+    ctxOverlay.fillStyle = "rgba(255, 50, 50, 0.5)";
+    ctxOverlay.beginPath();
+    ctxOverlay.arc(xH, yH, 5 / scale, 0, Math.PI * 2);
+    ctxOverlay.fill();
+
+    const pearlRadius = 8 / scale;
+
+    // 1. Draw K-Neighbourhood (Star Topology)
+    ctxOverlay.strokeStyle = "rgba(180, 50, 255, 0.6)"; // Purple Lines
+    ctxOverlay.lineWidth = 1.0 / scale;
+    ctxOverlay.fillStyle = "rgba(255, 255, 255, 0.9)";
+    ctxOverlay.font = `${10 / scale}px monospace`;
+    ctxOverlay.textAlign = "center";
+    ctxOverlay.textBaseline = "bottom";
+
+    // hoveredNeighbors is now RenderPoint[] {id, x, y}
+    if (typeof hoveredNeighbors !== 'undefined' && hoveredNeighbors) {
+      for (let n of hoveredNeighbors) {
+        // n is object {id, x, y}
+        if (n.id === pH) continue;
+
+        const nx = n.x;
+        const ny = n.y;
+
+        // Line from Center to Neighbor
+        ctxOverlay.beginPath();
+        ctxOverlay.moveTo(xH, yH);
+        ctxOverlay.lineTo(nx, ny);
+        ctxOverlay.stroke();
+
+        // Square Box around Neighbor
+        const boxSize = 12 / scale;
+        ctxOverlay.strokeStyle = "#ffffff";
+        ctxOverlay.lineWidth = 1 / scale;
+        ctxOverlay.strokeRect(nx - boxSize / 2, ny - boxSize / 2, boxSize, boxSize);
+
+        // Label: Actual Prime Value (Shift Key Only)
+        if (typeof isShiftPressed !== 'undefined' && isShiftPressed) {
+          ctxOverlay.fillStyle = "#ffffff";
+          ctxOverlay.fillText(n.id.toString(), nx, ny - boxSize / 2 - (4 / scale));
+        }
+      }
+    }
+
+    ctxOverlay.restore();
+  } else {
+    if (inspector) inspector.innerHTML = '<span style="color:#666; font-style:italic;">Hover to inspect</span>';
+  }
+}
+
+
 // --- UI Stats ---
 const elMax = document.getElementById('inp-max');
 const elVisible = document.getElementById('disp-visible');
@@ -380,7 +625,8 @@ const checkHeatmap = document.getElementById('toggle-heatmap');
 
 // Grid logic moved to spatialGrid.js
 
-const grid = new SpiralGrid();
+// Grid logic moved to spatialGrid.js
+// grid declared at top
 
 // --- CORE LOGIC ---
 function allocateBuffers(max) {
@@ -522,6 +768,10 @@ function resize() {
   requestAnimationFrame(draw);
   requestAnimationFrame(drawOverlay);
 }
+
+// --- DEBUG ---
+// grid declared above
+
 
 // --- RENDER ---
 function draw(timestamp) {
@@ -772,9 +1022,16 @@ function drawOverlay() {
     ctxOverlay.translate(cx + ox, cy + oy);
     ctxOverlay.scale(scale, scale);
 
+    // JIT Calc for Position (Fixing broken cacheX)
+    // FIX: Use cacheX/Y directly to match main render (Warp + Sign fix)
     const xH = cacheX[pH];
     const yH = cacheY[pH];
-    const pearlRadius = 8 / scale;
+
+    // Draw Center
+    ctxOverlay.fillStyle = "rgba(255, 50, 50, 0.5)";
+    ctxOverlay.beginPath();
+    ctxOverlay.arc(xH, yH, 5 / scale, 0, Math.PI * 2);
+    ctxOverlay.fill();
 
     // 1. Draw K-Neighbourhood (Star Topology)
     ctxOverlay.strokeStyle = "rgba(180, 50, 255, 0.6)"; // Purple Lines
@@ -784,13 +1041,13 @@ function drawOverlay() {
     ctxOverlay.textAlign = "center";
     ctxOverlay.textBaseline = "bottom";
 
-    // hoveredNeighbors is global
+    // hoveredNeighbors is now RenderPoint[] {id, x, y}
     if (typeof hoveredNeighbors !== 'undefined' && hoveredNeighbors) {
-      for (let nIdx of hoveredNeighbors) {
-        if (nIdx === pH) continue;
+      for (let n of hoveredNeighbors) {
+        if (n.id === pH) continue;
 
-        const nx = cacheX[nIdx];
-        const ny = cacheY[nIdx];
+        const nx = n.x;
+        const ny = n.y;
 
         // Line from Center to Neighbor
         ctxOverlay.beginPath();
@@ -807,10 +1064,12 @@ function drawOverlay() {
         // Label: Actual Prime Value (Shift Key Only)
         if (typeof isShiftPressed !== 'undefined' && isShiftPressed) {
           ctxOverlay.fillStyle = "#ffffff";
-          ctxOverlay.fillText(nIdx.toString(), nx, ny - boxSize / 2 - (4 / scale));
+          ctxOverlay.fillText(n.id.toString(), nx, ny - boxSize / 2 - (4 / scale));
         }
       }
     }
+
+    ctxOverlay.restore();
 
     // 2. Draw Anchor (Pearl) - P0
     ctxOverlay.beginPath();
@@ -1072,7 +1331,7 @@ if (btnGhost) btnGhost.onclick = () => polarStrip.toggle();
 
 
 // Visuals
-let detectedFibres = [];
+// detectedFibres declared globally at top
 let pendingDiscovery = false;
 
 function runFibreDetection() {
@@ -1265,41 +1524,13 @@ self.onmessage = function (e) {
 `], { type: 'application/javascript' });
 
 // --- INIT ---
-const heatmapLayer = new HeatmapLayer(ctxOverlay);
-let analysisWorker = null;
-try {
-  // Use Blob URL instead of file path
-  const workerUrl = URL.createObjectURL(workerBlob);
-  analysisWorker = new Worker(workerUrl);
-  analysisWorker.onmessage = (e) => {
-    if (e.data.type === 'RESULT') {
-      heatmapLayer.updateData(e.data.zGrid, e.data.maxZ, e.data.rBins, e.data.thetaBins, e.data.maxR);
-      requestAnimationFrame(drawOverlay);
-
-      // Update Button State
-      if (typeof btnRunDiscovery !== 'undefined' && btnRunDiscovery) {
-        btnRunDiscovery.classList.remove('spin');
-        // Actually style default is #888, active is #fff or color.
-        // Let's remove inline style to revert to class, or set to a "Ready" color?
-        btnRunDiscovery.style.color = ""; // Reset
-      }
-
-      if (elDetectorStatus) elDetectorStatus.innerText = "Status: Analysis Ready";
-
-      // Resume Detection if Pending
-      if (pendingDiscovery) {
-        pendingDiscovery = false;
-        runFibreDetection();
-      }
-    }
-  }
-} catch (e) {
-  console.error("Worker Init Failed:", e);
-  alert("Analysis Worker Failed. Please check console.");
-}
+// --- LEGACY WORKER REMOVED (Replaced by WASM) ---
+let analysisWorker = null; // Stubs for compatibility if needed, else remove. 
+// Actually, triggerAnalysis checks it. We should update triggerAnalysis.
 
 function triggerAnalysis() {
-  if (analysisWorker) {
+  // if (analysisWorker) { <--- REMOVED CHECK to allow WASM to run
+  if (true) {
     // DYNAMIC RESOLUTION SCALING (High Precision Update)
     // We target higher angular resolution for smooth fibre tracing.
 
@@ -1498,212 +1729,18 @@ function actionFastZoom() {
 if (btnFit) btnFit.onclick = actionFit;
 if (btnFastZoom) btnFastZoom.onclick = actionFastZoom;
 
-// --- RENDER ---
-function draw(timestamp) {
-  const start = performance.now();
-
-  // UPDATE CAMERA
-  const isMoving = camera.update();
-  if (isMoving) requestAnimationFrame(draw);
-
-  // Sync Zoom Level Text
-  if (elDispZoom) {
-    // Show as float with 2 decimal places? or X factor?
-    // User said "as a number".
-    elDispZoom.innerText = camera.scale.toFixed(2);
-  }
-
-  // Apply Stability
-  const stabilityActive = document.getElementById('toggle-stability') ? document.getElementById('toggle-stability').checked : false;
-  if (stabilityActive) {
-    camera.applyEffect('SCALE', 0.05);
-    requestAnimationFrame(draw); // Keep animating
-  }
-
-  // Use Render State from Camera
-  const scale = camera.renderScale;
-  const cx = camera.centerX;
-  const cy = camera.centerY;
-  const ox = camera.renderOffset.x;
-  const oy = camera.renderOffset.y;
-  const W = canvas.width / (window.devicePixelRatio || 1);
-  const H = canvas.height / (window.devicePixelRatio || 1);
-
-  // Bounds
-  const tl = camera.screenToWorld(0, 0);
-  const br = camera.screenToWorld(W, H);
-
-  const query = grid.query(tl.x, tl.y, br.x, br.y);
-  const visibleChunks = query.chunks;
-  const count = query.count;
-
-  // Strategy
-  let strategy = 'VECTOR';
-  if (scale < 0.2 || count > SAFETY_LIMIT) strategy = 'PIXEL';
-
-  ctx.clearRect(0, 0, W, H);
-  ctx.fillStyle = "#0d0d0d";
-  ctx.fillRect(0, 0, W, H);
-
-  ctx.save();
-  ctx.translate(cx + ox, cy + oy);
-  ctx.scale(scale, scale);
-
-  const dotSize = 1.2 / scale;
-
-  if (strategy === 'VECTOR') {
-    const isP10 = checkPow10.checked;
-    const isP2 = checkPow2.checked;
-    const isSq = checkSq.checked;
-
-    ctx.fillStyle = "#ff3333";
-    ctx.beginPath();
-    for (const chunk of visibleChunks) {
-      for (let i of chunk) {
-        if (primeMap[i] === 1) {
-          ctx.rect(cacheX[i] - dotSize / 2, cacheY[i] - dotSize / 2, dotSize, dotSize);
-        }
-      }
-    }
-    ctx.fill();
-
-    // Special points are now handled in Layer 2 (Global Lists) for performance.
-
-  } else {
-    // Pixel Mode - Hyper Optimized (Bit-Blit)
-    // 1. Get Prime Only chunks
-    const pQuery = grid.queryPrimes(tl.x, tl.y, br.x, br.y);
-
-    // 2. Prepare Buffer
-    // USE PHYSICAL DIMENSIONS for ImageData (Bit-Blit works in device pixels)
-    const dpr = window.devicePixelRatio || 1;
-    const iW = canvas.width; // Physical
-    const iH = canvas.height; // Physical
-    const imgData = ctx.createImageData(iW, iH);
-    const buf32 = new Uint32Array(imgData.data.buffer);
-
-    // 3. Blit
-    // Color: Red (ABGR = 0xFF0000FF)
-    const COLOR = 0xFF0000FF;
-    // Background: #0d0d0d (ABGR = 0xFF0d0d0d)
-    const BG_COLOR = 0xFF0d0d0d;
-
-    // Fill background (Robust clear + solid color)
-    buf32.fill(BG_COLOR);
-
-    // Pre-calc transforms (Logical -> Physical)
-    const offX = cx + ox;
-    const offY = cy + oy;
-
-    for (const chunk of pQuery.chunks) {
-      for (let i of chunk) {
-        // Project to Screen (Logical) then scale to Physical (DPR)
-        // x_phy = (worldX * scale + offX) * dpr
-        const sx = ((cacheX[i] * scale + offX) * dpr) | 0;
-        const sy = ((cacheY[i] * scale + offY) * dpr) | 0;
-
-        if (sx >= 0 && sx < iW && sy >= 0 && sy < iH) {
-          buf32[sy * iW + sx] = COLOR;
-        }
-      }
-    }
-
-    // Put at (0,0) (Physical)
-    // Note: putImageData ignores context transform, so it works directly in device pixels.
-    // However, our ctx might be scaled? putImageData resets to device coords.
-    ctx.putImageData(imgData, 0, 0);
-  }
-
-  // LAYER 2: Special Points (Silver/Green/Purple) - Always drawn ON TOP
-  // Precedence: Purple > Green > Silver
-  // Draw Order: Silver -> Green -> Purple
-
-  const isP10 = checkPow10.checked;
-  const isP2 = checkPow2.checked;
-  const isSq = checkSq.checked;
-
-  // 3 Screen Pixels Minimum size for visibility
-  const specialSize = 3 / scale;
-
-  if (isSq) {
-    ctx.fillStyle = "#C0C0C0"; // Silver
-    ctx.strokeStyle = "#C0C0C0";
-    ctx.lineWidth = Math.max(1, 2 / scale); // Keep visible
-
-    // Feature: Render as solid line if zoomed out
-    if (scale < 0.5) {
-      // Find furthest square
-      const maxRoot = Math.floor(Math.sqrt(maxNumber));
-      const lastSq = maxRoot * maxRoot;
-
-      ctx.beginPath();
-      ctx.moveTo(cacheX[1], cacheY[1]); // Start at 1
-      ctx.lineTo(cacheX[lastSq], cacheY[lastSq]); // End at max
-      ctx.stroke();
-    } else {
-      // Render points
-      for (let i of sqList) {
-        if (i > maxNumber) break;
-        if (i < minNumber) continue; // HOLLOW
-        const x = cacheX[i];
-        const y = cacheY[i];
-        if (x >= tl.x && x <= br.x && y >= tl.y && y <= br.y) {
-          ctx.fillRect(x - specialSize / 2, y - specialSize / 2, specialSize, specialSize);
-        }
-      }
-    }
-  }
-
-  if (isP10) {
-    ctx.fillStyle = "#00ff00";
-    for (let i of p10List) {
-      if (i > maxNumber) break;
-      if (i < minNumber) continue; // HOLLOW
-      const x = cacheX[i];
-      const y = cacheY[i];
-      // Bounds Check
-      if (x >= tl.x && x <= br.x && y >= tl.y && y <= br.y) {
-        ctx.fillRect(x - specialSize / 2, y - specialSize / 2, specialSize, specialSize);
-      }
-    }
-  }
-
-  if (isP2) {
-    ctx.fillStyle = "#aa00ff"; // Purple
-    for (let i of p2List) {
-      if (i > maxNumber) break;
-      if (i < minNumber) continue; // HOLLOW
-      const x = cacheX[i];
-      const y = cacheY[i];
-      if (x >= tl.x && x <= br.x && y >= tl.y && y <= br.y) {
-        ctx.fillRect(x - specialSize / 2, y - specialSize / 2, specialSize, specialSize);
-      }
-    }
-  }
-
-  ctx.restore();
-
-  // Stats
-  if (elVisible) elVisible.innerText = count.toLocaleString();
-  if (elRenderTime) elRenderTime.innerText = (performance.now() - start).toFixed(1) + "ms";
-  if (elStrategy) elStrategy.innerText = strategy;
-
-  // HUD
-  if (dbgZoom) dbgZoom.innerText = scale.toFixed(4);
-  if (dbgVisibleCount) dbgVisibleCount.innerText = count.toLocaleString();
-  if (dbgStrategyVal) dbgStrategyVal.innerText = strategy;
-  if (dbgOffset) dbgOffset.innerText = `${ox.toFixed(0)}, ${oy.toFixed(0)}`;
-  if (dbgMin) dbgMin.innerText = `${tl.x.toFixed(1)}, ${tl.y.toFixed(1)}`;
-  if (dbgMax) dbgMax.innerText = `${br.x.toFixed(1)}, ${br.y.toFixed(1)}`;
-
-  // Sync Overlay (Fibres/Heatmap) with current frame
-  drawOverlay();
-
-
-}
+// --- DUPLICATE DRAW REMOVED ---
 
 // --- UI SETUP (Moved from index.html) ---
 function setupUI() {
+  // Initialize Helpers
+  if (typeof HeatmapLayer !== 'undefined') {
+    heatmapLayer = new HeatmapLayer(ctxOverlay);
+    console.log("Heatmap Initialized");
+  } else {
+    console.error("HeatmapLayer Class Missing");
+  }
+
   // --- MIN NUMBER ---
   const inpMin = document.getElementById('inp-min');
 

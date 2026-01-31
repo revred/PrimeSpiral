@@ -8,21 +8,10 @@
   <base href="/" />
   <script type="importmap">{
   "imports": {
-    "./Page.Scripts/_framework/blazor.webassembly.js": "./Page.Scripts/_framework/blazor.webassembly.66stpp682q.js",
-    "./Page.Scripts/_framework/dotnet.js": "./Page.Scripts/_framework/dotnet.9gtl5zr2oo.js",
-    "./Page.Scripts/_framework/dotnet.native.js": "./Page.Scripts/_framework/dotnet.native.87vtjjdetb.js",
-    "./Page.Scripts/_framework/dotnet.runtime.js": "./Page.Scripts/_framework/dotnet.runtime.2tx45g8lli.js"
-  },
-  "scopes": {},
-  "integrity": {
-    "./Page.Scripts/_framework/blazor.webassembly.66stpp682q.js": "sha256-3lCWrko3zwspV40aQhs2S/IMkRSarnHRKIdkHhuXIBA=",
-    "./Page.Scripts/_framework/blazor.webassembly.js": "sha256-3lCWrko3zwspV40aQhs2S/IMkRSarnHRKIdkHhuXIBA=",
-    "./Page.Scripts/_framework/dotnet.9gtl5zr2oo.js": "sha256-WUmv1/7e/UNHcEL5uDHejotPSK7lT4ljdIljarYuy+s=",
-    "./Page.Scripts/_framework/dotnet.js": "sha256-WUmv1/7e/UNHcEL5uDHejotPSK7lT4ljdIljarYuy+s=",
-    "./Page.Scripts/_framework/dotnet.native.87vtjjdetb.js": "sha256-zE11fbcG2CeLl1Zi+NJgMOfWpdjuUWNte+icrtAO58I=",
-    "./Page.Scripts/_framework/dotnet.native.js": "sha256-zE11fbcG2CeLl1Zi+NJgMOfWpdjuUWNte+icrtAO58I=",
-    "./Page.Scripts/_framework/dotnet.runtime.2tx45g8lli.js": "sha256-2lZh9yO0fnzm3Xt7yV+Kox3DH3nK7L8hDhm84VT1xco=",
-    "./Page.Scripts/_framework/dotnet.runtime.js": "sha256-2lZh9yO0fnzm3Xt7yV+Kox3DH3nK7L8hDhm84VT1xco="
+    "./_framework/blazor.webassembly.js": "./_framework/blazor.webassembly.yiodnjoszm.js",
+    "./_framework/dotnet.js": "./_framework/dotnet.js",
+    "./_framework/dotnet.native.js": "./_framework/dotnet.native.xidrk0eo52.js",
+    "./_framework/dotnet.runtime.js": "./_framework/dotnet.runtime.hv7sykez1z.js"
   }
 }</script>
   <style>
@@ -862,16 +851,17 @@
   </div>
 
 
-  <script src="Page.Scripts/fiberManager.js"></script>
-  <script src="Page.Scripts/rng.js"></script>
-  <script src="Page.Scripts/camera.js"></script>
-  <script src="Page.Scripts/input.js"></script>
-  <script src="Page.Scripts/heatmap.js"></script>
-  <script src="Page.Scripts/fibreDetector.js"></script>
-  <script src="Page.Scripts/spatialGrid.js"></script>
-  <script src="Page.Scripts/_framework/blazor.webassembly.js?v=2" autostart="false"></script>
-  <script src="Page.Scripts/wasmBridge.js?v=2"></script>
-  <script src="Page.Scripts/spiral.js"></script>
+  <script src="wwwroot/fiberManager.js"></script>
+  <script src="wwwroot/rng.js"></script>
+  <script src="wwwroot/camera.js"></script>
+  <script src="wwwroot/input.js"></script>
+  <script src="wwwroot/heatmap.js"></script>
+  <script src="wwwroot/fibreDetector.js"></script>
+  <!-- spatialGrid.js removed (Legacy) -->
+  <script src="wwwroot/_framework/blazor.webassembly.js" autostart="false"></script>
+  <script src="wwwroot/wasmBridge.js"></script>
+  <script src="wwwroot/test_bench.js"></script>
+  <script src="wwwroot/spiral.js"></script>
   <script>
     // --- Formatter / Parser ---
     function formatNumber(num) {
