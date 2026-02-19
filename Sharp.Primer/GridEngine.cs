@@ -1,14 +1,13 @@
 using Microsoft.JSInterop;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace Sharp.Primer
 {
     public class GridEngine
     {
         private const int CHUNK_SIZE = 100;
-        
+
         // Structure to hold point data closely packed
         private struct PointData
         {
@@ -18,11 +17,62 @@ namespace Sharp.Primer
             public bool IsPrime;
         }
 
-        private static Dictionary<int, List<PointData>> _chunks = new();
-        private static Dictionary<int, List<PointData>> _primeChunks = new();
-        
+        private static readonly Dictionary<int, List<PointData>> _chunks = new();
+        private static readonly Dictionary<int, List<PointData>> _primeChunks = new();
+
+        private static double[] _coordX = Array.Empty<double>();
+        private static double[] _coordY = Array.Empty<double>();
+        private static int _coordLimit = -1;
+
+        private static double _spacing = 1.0;
+        private static double _warpR0 = 120.0;
+        private static bool _useWarp = true;
+
         // Bounds
         private static double _minX, _maxX, _minY, _maxY;
+
+        private static int ToChunkKey(int x, int y) => (y << 16) | (x & 0xFFFF);
+
+        private static void EnsureCoordCapacity(int limit)
+        {
+            if (_coordX.Length == limit + 1 && _coordY.Length == limit + 1) return;
+            _coordX = new double[limit + 1];
+            _coordY = new double[limit + 1];
+            _coordLimit = limit;
+        }
+
+        private static void ComputePoint(int id, out double x, out double y)
+        {
+            double root = Math.Sqrt(id);
+            double theta = root * 2.0 * Math.PI;
+            double r = root * _spacing;
+            double rw = _useWarp ? (r * r) / (r + _warpR0) : r;
+
+            x = -Math.Cos(theta) * rw;
+            y = Math.Sin(theta) * rw;
+        }
+
+        private static bool TryGetPoint(int id, out double x, out double y)
+        {
+            if (id >= 0 && id <= _coordLimit && _coordX.Length > id)
+            {
+                x = _coordX[id];
+                y = _coordY[id];
+                return true;
+            }
+
+            ComputePoint(id, out x, out y);
+            return false;
+        }
+
+        [JSInvokable("SetTransform")]
+        public static string SetTransform(double spacing, double r0, bool useWarp)
+        {
+            _spacing = spacing <= 0 ? 1.0 : spacing;
+            _warpR0 = r0 <= 0 ? 1.0 : r0;
+            _useWarp = useWarp;
+            return $"Transform set: spacing={_spacing:F3}, r0={_warpR0:F2}, warp={_useWarp}";
+        }
 
         [JSInvokable("BuildGrid")]
         public static string BuildGrid(int limit)
@@ -33,18 +83,15 @@ namespace Sharp.Primer
                 _primeChunks.Clear();
                 _minX = double.MaxValue; _maxX = double.MinValue;
                 _minY = double.MaxValue; _maxY = double.MinValue;
+                EnsureCoordCapacity(limit);
 
-                // Re-generate locations based on Sacks Spiral Formula
-                var primes = PrimeEngine.GeneratePrimes(limit);
-                var primeSet = new HashSet<int>(primes);
+                byte[] primeMap = PrimeEngine.GeneratePrimeMap(limit);
 
                 for (int i = 0; i <= limit; i++)
                 {
-                    // Polar to Cartesian
-                    double root = Math.Sqrt(i);
-                    double theta = root * 2 * Math.PI;
-                    double x = root * Math.Cos(theta);
-                    double y = -root * Math.Sin(theta); 
+                    ComputePoint(i, out double x, out double y);
+                    _coordX[i] = x;
+                    _coordY[i] = y;
 
                     if (x < _minX) _minX = x;
                     if (x > _maxX) _maxX = x;
@@ -53,20 +100,28 @@ namespace Sharp.Primer
 
                     int kx = (int)Math.Floor(x / CHUNK_SIZE);
                     int ky = (int)Math.Floor(y / CHUNK_SIZE);
-                    int key = (ky << 16) | (kx & 0xFFFF);
+                    int key = ToChunkKey(kx, ky);
 
-                    if (!_chunks.ContainsKey(key)) _chunks[key] = new List<PointData>();
-                    
-                    var p = new PointData { Id = i, X = x, Y = y, IsPrime = primeSet.Contains(i) };
-                    _chunks[key].Add(p);
+                    if (!_chunks.TryGetValue(key, out var chunk))
+                    {
+                        chunk = new List<PointData>(64);
+                        _chunks[key] = chunk;
+                    }
+
+                    var p = new PointData { Id = i, X = x, Y = y, IsPrime = primeMap[i] == 1 };
+                    chunk.Add(p);
 
                     if (p.IsPrime)
                     {
-                        if (!_primeChunks.ContainsKey(key)) _primeChunks[key] = new List<PointData>();
-                        _primeChunks[key].Add(p);
+                        if (!_primeChunks.TryGetValue(key, out var primeChunk))
+                        {
+                            primeChunk = new List<PointData>(32);
+                            _primeChunks[key] = primeChunk;
+                        }
+                        primeChunk.Add(p);
                     }
                 }
-                return $"Success: Built grid with {limit} points. Chunks: {_chunks.Count}";
+                return $"Success: Built grid with {limit} points. Chunks: {_chunks.Count}. Warp: {_useWarp}";
             }
             catch (Exception ex)
             {
@@ -91,7 +146,7 @@ namespace Sharp.Primer
             {
                 for (int kx = minKX; kx <= maxKX; kx++)
                 {
-                    int key = (ky << 16) | (kx & 0xFFFF);
+                    int key = ToChunkKey(kx, ky);
                     if (_primeChunks.TryGetValue(key, out var list))
                     {
                         foreach (var p in list)
@@ -119,56 +174,97 @@ namespace Sharp.Primer
             public double Y { get; set; }
         }
 
-        [JSInvokable("GetNeighbors")]
-        public static RenderPoint[] GetNeighbors(int centerId, int count)
+        private static int[] GetNeighborIdsCore(int centerId, int count)
         {
-             // Optimization: Re-calculate X/Y from ID (Sacks Spiral is deterministic!)
-            double root = Math.Sqrt(centerId);
-            double theta = root * 2 * Math.PI;
-            double cx = root * Math.Cos(theta);
-            double cy = -root * Math.Sin(theta);
-            
-            double searchRadius = 50.0 + (root * 0.5); // Heuristic radius
-            
+            if (count <= 0 || centerId < 0 || centerId > _coordLimit) return Array.Empty<int>();
+
+            TryGetPoint(centerId, out double cx, out double cy);
+            double searchRadius = 50.0 + (Math.Sqrt(centerId) * 0.5);
+            double maxDistSq = searchRadius * searchRadius;
+
             int minKX = (int)Math.Floor((cx - searchRadius) / CHUNK_SIZE);
             int maxKX = (int)Math.Floor((cx + searchRadius) / CHUNK_SIZE);
             int minKY = (int)Math.Floor((cy - searchRadius) / CHUNK_SIZE);
             int maxKY = (int)Math.Floor((cy + searchRadius) / CHUNK_SIZE);
 
-            var neighbors = new List<(int id, double x, double y, double distSq)>();
+            var candidates = new List<(int id, double distSq)>(count * 8);
 
             for (int ky = minKY; ky <= maxKY; ky++)
             {
                 for (int kx = minKX; kx <= maxKX; kx++)
                 {
-                    int key = (ky << 16) | (kx & 0xFFFF);
-                    if (_primeChunks.TryGetValue(key, out var list))
+                    int key = ToChunkKey(kx, ky);
+                    if (!_primeChunks.TryGetValue(key, out var list)) continue;
+
+                    foreach (var p in list)
                     {
-                        foreach (var p in list)
+                        if (p.Id == centerId) continue;
+
+                        double dx = p.X - cx;
+                        double dy = p.Y - cy;
+                        double dSq = dx * dx + dy * dy;
+                        if (dSq <= maxDistSq)
                         {
-                            // Include center in list for rendering? Usually neighbors means *other* points.
-                            // But for rendering the "Cluster" we might want the center too.
-                            // Let's stick to neighbors exclude center.
-                            if (p.Id == centerId) continue;
-                            
-                            double dx = p.X - cx;
-                            double dy = p.Y - cy;
-                            double dSq = dx * dx + dy * dy;
-                            
-                            if (dSq < searchRadius * searchRadius)
-                            {
-                                neighbors.Add((p.Id, p.X, p.Y, dSq));
-                            }
+                            candidates.Add((p.Id, dSq));
                         }
                     }
                 }
             }
-            
-            // Return top K sorted by distance
-            return neighbors.OrderBy(n => n.distSq)
-                            .Take(count)
-                            .Select(n => new RenderPoint { Id = n.id, X = n.x, Y = n.y })
-                            .ToArray();
+
+            if (candidates.Count == 0) return Array.Empty<int>();
+
+            candidates.Sort((a, b) => a.distSq.CompareTo(b.distSq));
+
+            int take = Math.Min(count, candidates.Count);
+            var ids = new int[take];
+            for (int i = 0; i < take; i++)
+            {
+                ids[i] = candidates[i].id;
+            }
+            return ids;
+        }
+
+        [JSInvokable("GetNeighborIds")]
+        public static int[] GetNeighborIds(int centerId, int count)
+        {
+            return GetNeighborIdsCore(centerId, count);
+        }
+
+        [JSInvokable("GetNeighborhoodIds")]
+        public static int[] GetNeighborhoodIds(double x, double y, double maxDist, int neighborCount)
+        {
+            int nearestId = GetNearest(x, y, maxDist);
+            if (nearestId == -1) return Array.Empty<int>();
+
+            var neighbors = GetNeighborIdsCore(nearestId, neighborCount);
+            var result = new int[neighbors.Length + 1];
+            result[0] = nearestId;
+            if (neighbors.Length > 0)
+            {
+                Array.Copy(neighbors, 0, result, 1, neighbors.Length);
+            }
+            return result;
+        }
+
+        [JSInvokable("GetNeighbors")]
+        public static RenderPoint[] GetNeighbors(int centerId, int count)
+        {
+            var ids = GetNeighborIdsCore(centerId, count);
+            if (ids.Length == 0) return Array.Empty<RenderPoint>();
+
+            var result = new RenderPoint[ids.Length];
+            for (int i = 0; i < ids.Length; i++)
+            {
+                int id = ids[i];
+                TryGetPoint(id, out double x, out double y);
+                result[i] = new RenderPoint
+                {
+                    Id = id,
+                    X = x,
+                    Y = y
+                };
+            }
+            return result;
         }
 
         [JSInvokable("GetDensityMap")]
@@ -181,11 +277,7 @@ namespace Sharp.Primer
                 int[] primeCounts = new int[totalBins];
                 float[] expCounts = new float[totalBins];
 
-                // 1. Sieve Primes (Reuse PrimeEngine logic or call it)
-                // We need random access check, so a bool array is ideal.
-                bool[] isPrime = new bool[maxNumber + 1];
-                var primeList = PrimeEngine.GeneratePrimes(maxNumber);
-                foreach (var p in primeList) isPrime[p] = true;
+                byte[] primeMap = PrimeEngine.GeneratePrimeMap(maxNumber);
 
                 double maxR = Math.Sqrt(maxNumber);
                 double PI2 = Math.PI * 2;
@@ -207,7 +299,7 @@ namespace Sharp.Primer
 
                     int binIdx = rIdx * thetaBins + tIdx;
 
-                    if (isPrime[n]) primeCounts[binIdx]++;
+                    if (primeMap[n] == 1) primeCounts[binIdx]++;
                     expCounts[binIdx] += (float)(1.0 / Math.Log(n));
                 }
 

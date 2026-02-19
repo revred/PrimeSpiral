@@ -10,6 +10,7 @@ window.wasmEngine = {
             console.log("WASM: Runtime Ready");
             this.isReady = true;
             this.test();
+            await this.setTransform(1, 120, true);
             // Auto-build grid on init to unblock user immediately
             this.buildGrid(2000000);
         } catch (e) {
@@ -41,14 +42,34 @@ window.wasmEngine = {
         console.log(`WASM: Grid Built in ${(performance.now() - startTime).toFixed(2)}ms`);
     },
 
+    setTransform: async function (spacing, r0, useWarp) {
+        if (!this.isReady) await this.waitForRuntime();
+        return await DotNet.invokeMethodAsync('Sharp.Primer', 'SetTransform', spacing, r0, useWarp);
+    },
+
     getNearest: async function (x, y, maxDist) {
         if (!this.isReady) return -1;
         return await DotNet.invokeMethodAsync('Sharp.Primer', 'GetNearest', x, y, maxDist);
     },
 
+    getNeighborhoodIds: async function (x, y, maxDist, count) {
+        if (!this.isReady) return [];
+        return await DotNet.invokeMethodAsync('Sharp.Primer', 'GetNeighborhoodIds', x, y, maxDist, count);
+    },
+
+    getNeighborIds: async function (centerId, count) {
+        if (!this.isReady) return [];
+        return await DotNet.invokeMethodAsync('Sharp.Primer', 'GetNeighborIds', centerId, count);
+    },
+
     getNeighbors: async function (centerId, count) {
         if (!this.isReady) return [];
         return await DotNet.invokeMethodAsync('Sharp.Primer', 'GetNeighbors', centerId, count);
+    },
+
+    getPrimeMap: async function (limit) {
+        if (!this.isReady) return null;
+        return await DotNet.invokeMethodAsync('Sharp.Primer', 'GetPrimeMap', limit);
     },
 
     getDensityMap: async function (maxNumber, rBins, thetaBins) {

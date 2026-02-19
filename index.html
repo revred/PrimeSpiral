@@ -61,6 +61,10 @@
       cursor: crosshair;
     }
 
+    #canvas-overlay {
+      touch-action: none;
+    }
+
     /* UI Overlay */
     #ui-layer {
       position: absolute;
@@ -484,6 +488,68 @@
         transform: rotate(360deg);
       }
     }
+
+    @media (max-width: 900px) {
+      #ui-layer {
+        top: 8px;
+        left: 8px;
+        right: 8px;
+      }
+
+      .panel {
+        width: calc(100vw - 16px);
+        min-width: 0;
+        max-height: 44vh;
+        overflow-y: auto;
+        padding: 10px;
+      }
+
+      #debug-hud {
+        top: auto !important;
+        left: 8px !important;
+        right: 8px !important;
+        bottom: 8px !important;
+        width: auto !important;
+        max-height: 30vh;
+        overflow-y: auto;
+        font-size: 10px !important;
+      }
+
+      #right-toolbar {
+        right: 8px;
+        bottom: 104px;
+        gap: 8px;
+      }
+
+      .icon-btn {
+        width: 36px;
+        height: 36px;
+      }
+
+      .icon-btn::after {
+        display: none;
+      }
+
+      .nav-panel {
+        right: 8px;
+        bottom: 8px;
+        grid-template-columns: repeat(3, 36px);
+        grid-gap: 6px;
+        padding: 8px;
+      }
+
+      .nav-btn,
+      .nav-display {
+        width: 36px;
+        height: 36px;
+      }
+
+      #polar-panel {
+        width: calc(100vw - 16px) !important;
+        left: 8px !important;
+        right: 8px !important;
+      }
+    }
   </style>
   <script>
     window.onerror = function (msg, url, lineNo, columnNo, error) {
@@ -684,7 +750,8 @@
 
 
       <div class="small" style="margin-top:10px; line-height:1.35;">
-        <b>Controls:</b> Wheel = Zoom, Drag = Pan, Hover = Snap tooltip<br>
+        <b>Controls:</b> Wheel = Zoom, Drag = Pan, Hover/Tap = Snap tooltip<br>
+        <b>Mobile:</b> Drag = Pan, Pinch = Zoom, Double-tap = Zoom-in<br>
         <b>Tip:</b> Increase R0 to squeeze inner region harder.
       </div>
     </div>
@@ -854,14 +921,15 @@
   <script src="wwwroot/fiberManager.js?v=3"></script>
   <script src="wwwroot/rng.js?v=3"></script>
   <script src="wwwroot/camera.js?v=3"></script>
-  <script src="wwwroot/input.js?v=3"></script>
+  <script src="wwwroot/input.js?v=4"></script>
   <script src="wwwroot/heatmap.js?v=3"></script>
   <script src="wwwroot/fibreDetector.js?v=3"></script>
+  <script src="wwwroot/dataCache.js?v=1"></script>
   <!-- spatialGrid.js removed (Legacy) -->
   <script src="wwwroot/_framework/blazor.webassembly.js" autostart="false"></script>
-  <script src="wwwroot/wasmBridge.js?v=3"></script>
+  <script src="wwwroot/wasmBridge.js?v=4"></script>
   <script src="wwwroot/test_bench.js?v=3"></script>
-  <script src="wwwroot/spiral.js?v=3"></script>
+  <script src="wwwroot/spiral.js?v=4"></script>
   <script>
     // --- Formatter / Parser ---
     function formatNumber(num) {

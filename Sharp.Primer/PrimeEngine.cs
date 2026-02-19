@@ -1,66 +1,77 @@
 using Microsoft.JSInterop;
 using System;
 using System.Collections.Generic;
-using System.Linq;
 
 namespace Sharp.Primer
 {
     public class PrimeEngine
     {
+        private static readonly object PrimeMapLock = new();
+        private static int _cachedPrimeMapLimit = -1;
+        private static byte[] _cachedPrimeMap = Array.Empty<byte>();
+
+        public static byte[] GeneratePrimeMap(int limit)
+        {
+            if (limit < 1)
+            {
+                return new byte[Math.Max(2, limit + 1)];
+            }
+
+            lock (PrimeMapLock)
+            {
+                if (_cachedPrimeMapLimit == limit && _cachedPrimeMap.Length == limit + 1)
+                {
+                    return _cachedPrimeMap;
+                }
+
+                var map = new byte[limit + 1];
+
+                for (int i = 2; i <= limit; i++)
+                {
+                    map[i] = 1;
+                }
+
+                int root = (int)Math.Sqrt(limit);
+                for (int i = 2; i <= root; i++)
+                {
+                    if (map[i] == 0) continue;
+
+                    int start = i * i;
+                    for (int j = start; j <= limit; j += i)
+                    {
+                        map[j] = 0;
+                    }
+                }
+
+                map[0] = 0;
+                if (limit >= 1) map[1] = 0;
+
+                _cachedPrimeMapLimit = limit;
+                _cachedPrimeMap = map;
+                return map;
+            }
+        }
+
         [JSInvokable]
         public static int[] GeneratePrimes(int limit)
         {
             if (limit < 2) return Array.Empty<int>();
 
-            // Sieve of Atkin Implementation
-            // High performance C# implementation
-            
-            var isPrime = new bool[limit + 1];
-            var sqrt = Math.Sqrt(limit);
-
-            for (int x = 1; x <= sqrt; x++)
-            {
-                for (int y = 1; y <= sqrt; y++)
-                {
-                    int n = 4 * x * x + y * y;
-                    if (n <= limit && (n % 12 == 1 || n % 12 == 5))
-                        isPrime[n] ^= true;
-
-                    n = 3 * x * x + y * y;
-                    if (n <= limit && n % 12 == 7)
-                        isPrime[n] ^= true;
-
-                    n = 3 * x * x - y * y;
-                    if (x > y && n <= limit && n % 12 == 11)
-                        isPrime[n] ^= true;
-                }
-            }
-
-            for (int n = 5; n <= sqrt; n++)
-            {
-                if (isPrime[n])
-                {
-                    int sq = n * n;
-                    for (int k = sq; k <= limit; k += sq)
-                        isPrime[k] = false;
-                }
-            }
-
-            isPrime[2] = true;
-            isPrime[3] = true;
-
-            // Collect results
-            // Optimize: Pre-calculate size or use List
+            var primeMap = GeneratePrimeMap(limit);
             var primes = new List<int>((int)(limit / Math.Log(limit) * 1.1));
-            if (limit >= 2) primes.Add(2);
-            if (limit >= 3) primes.Add(3);
 
-            for (int n = 5; n <= limit; n += 2)
+            for (int n = 2; n <= limit; n++)
             {
-                if (isPrime[n]) primes.Add(n);
+                if (primeMap[n] == 1) primes.Add(n);
             }
 
             return primes.ToArray();
+        }
+
+        [JSInvokable("GetPrimeMap")]
+        public static byte[] GetPrimeMap(int limit)
+        {
+            return GeneratePrimeMap(limit);
         }
 
         [JSInvokable]

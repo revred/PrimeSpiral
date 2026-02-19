@@ -184,6 +184,18 @@ const fiberManager = window.fiberManager || {
 const camera = new Camera(window.innerWidth / 2, window.innerHeight / 2);
 window.camera = camera; // Expose for debugging
 
+function hydrateNeighborIds(ids) {
+  if (!Array.isArray(ids) || !cacheX || !cacheY) return [];
+
+  const neighbors = [];
+  for (const id of ids) {
+    if (id >= 0 && id < cacheX.length) {
+      neighbors.push({ id: id, x: cacheX[id], y: cacheY[id] });
+    }
+  }
+  return neighbors;
+}
+
 // 3. Input System
 const inputHandler = new InputHandler(canvasOverlay, camera, () => {
   requestAnimationFrame(draw);
@@ -201,13 +213,13 @@ const inputHandler = new InputHandler(canvasOverlay, camera, () => {
   let searchRad = 50 / camera.renderScale;
   if (searchRad < 10) searchRad = 10;
 
-  // 1. Find Nearest Prime (Prefer WASM, Fallback to JS)
+  // 1. Find Nearest Prime + Neighborhood (Prefer WASM, Fallback to JS)
   if (window.wasmEngine && window.wasmEngine.isReady) {
-    window.wasmEngine.getNearest(wx, wy, searchRad).then(nearestId => {
-      if (nearestId !== -1) {
-        window.wasmEngine.getNeighbors(nearestId, K_NEIGHBORS).then(neighbors => {
-          processHover(nearestId, neighbors, wx, wy);
-        });
+    window.wasmEngine.getNeighborhoodIds(wx, wy, searchRad, K_NEIGHBORS).then((ids) => {
+      if (Array.isArray(ids) && ids.length > 0) {
+        const nearestId = ids[0];
+        const neighbors = hydrateNeighborIds(ids.slice(1));
+        processHover(nearestId, neighbors, wx, wy);
       } else {
         processHover(null, [], wx, wy);
       }
@@ -248,8 +260,8 @@ const inputHandler = new InputHandler(canvasOverlay, camera, () => {
         const dy = cacheY[nearest] - wy;
         const distSq = dx * dx + dy * dy;
         const screenDist = Math.sqrt(distSq) * camera.renderScale;
-
-        if (screenDist < 50) { // SNAP DIST
+        const snapDist = window.isTouchInput ? 90 : 50;
+        if (screenDist < snapDist) {
           isValid = true;
         }
       }
@@ -648,15 +660,94 @@ window.updateMinNumber = (val) => {
   requestAnimationFrame(draw);
 };
 
-function initPrimes() {
-  primeMap.fill(1);
-  primeMap[0] = 0; primeMap[1] = 0;
-  for (let i = 2; i * i <= maxNumber; i++) {
-    if (primeMap[i]) {
-      for (let j = i * i; j <= maxNumber; j += i) primeMap[j] = 0;
+window.updateMaxNumber = async (val) => {
+  const nextMax = Math.max(1000, Math.floor(val));
+  if (nextMax === maxNumber) return;
+
+  maxNumber = nextMax;
+  if (minNumber > maxNumber) minNumber = 0;
+
+  allocateBuffers(maxNumber);
+  await initPrimes();
+  triggerAnalysis();
+  requestAnimationFrame(draw);
+};
+
+function decodePrimeMapPayload(payload, expectedLength) {
+  if (!payload) return null;
+
+  if (payload instanceof Uint8Array) {
+    return payload.length === expectedLength ? payload : null;
+  }
+
+  if (Array.isArray(payload)) {
+    const arr = Uint8Array.from(payload);
+    return arr.length === expectedLength ? arr : null;
+  }
+
+  if (typeof payload === "string") {
+    const bin = atob(payload);
+    if (bin.length !== expectedLength) return null;
+    const arr = new Uint8Array(expectedLength);
+    for (let i = 0; i < bin.length; i++) arr[i] = bin.charCodeAt(i);
+    return arr;
+  }
+
+  return null;
+}
+
+async function initPrimes() {
+  const expectedLength = maxNumber + 1;
+  let source = "js-sieve";
+
+  try {
+    if (window.primeDataCache) {
+      const cachedMap = await window.primeDataCache.getPrimeMap(maxNumber);
+      if (cachedMap && cachedMap.length === expectedLength) {
+        primeMap = cachedMap;
+        source = "indexeddb";
+      }
+    }
+  } catch (e) {
+    console.warn("[PrimeData] Cache read failed", e);
+  }
+
+  if (!primeMap || primeMap.length !== expectedLength || source !== "indexeddb") {
+    let wasmPrimeMap = null;
+    if (window.wasmEngine && window.wasmEngine.isReady && window.wasmEngine.getPrimeMap) {
+      try {
+        wasmPrimeMap = await window.wasmEngine.getPrimeMap(maxNumber);
+      } catch (e) {
+        console.warn("[PrimeData] WASM prime map fetch failed", e);
+      }
+    }
+
+    const decodedMap = decodePrimeMapPayload(wasmPrimeMap, expectedLength);
+    if (decodedMap) {
+      primeMap = decodedMap;
+      source = "wasm";
+    } else {
+      primeMap.fill(1);
+      primeMap[0] = 0;
+      primeMap[1] = 0;
+      for (let i = 2; i * i <= maxNumber; i++) {
+        if (!primeMap[i]) continue;
+        for (let j = i * i; j <= maxNumber; j += i) primeMap[j] = 0;
+      }
+    }
+
+    if (window.primeDataCache && primeMap && primeMap.length === expectedLength) {
+      window.primeDataCache.putPrimeMap(maxNumber, primeMap).catch(() => { });
     }
   }
+
+  console.log(`[PrimeData] Prime map source: ${source}`);
   updateCache();
+
+  primeList = [];
+  for (let i = 2; i <= maxNumber; i++) {
+    if (primeMap[i] === 1) primeList.push(i);
+  }
 
   // Pre-calculate Special Points for Layered Rendering
   // PRECISION UPDATE: Generate using Integer Math (No FP errors)
@@ -696,8 +787,10 @@ function initPrimes() {
 let p10List = [];
 let p2List = [];
 let sqList = [];
+let primeList = [];
 
 function warpR(r, R0) { return (r * r) / (r + R0); }
+let wasmGridSyncTimer = null;
 
 function updateCache() {
   const R0 = +sliderR0.value;
@@ -724,9 +817,17 @@ function updateCache() {
   grid.build();
   // Sync WASM Grid
   if (window.wasmEngine && window.wasmEngine.isReady) {
-    window.wasmEngine.buildGrid(maxNumber).then(() => {
-      console.log("[Spiral] WASM Grid Synced");
-    });
+    if (wasmGridSyncTimer) clearTimeout(wasmGridSyncTimer);
+    wasmGridSyncTimer = setTimeout(() => {
+      window.wasmEngine.setTransform(SPACING, R0, useWarp)
+        .then(() => window.wasmEngine.buildGrid(maxNumber))
+        .then(() => {
+          console.log("[Spiral] WASM Grid Synced");
+        })
+        .catch((e) => {
+          console.warn("[Spiral] WASM Grid Sync Failed", e);
+        });
+    }, 75);
   }
   updateWarpGraph();
   if (elProfileResults) elProfileResults.innerText = "Ready.";
@@ -1673,10 +1774,10 @@ const StateManager = {
 
 window.addEventListener('beforeunload', () => StateManager.save());
 
-function init() {
+async function init() {
   StateManager.load(); // Restore state before init
   allocateBuffers(maxNumber);
-  initPrimes();
+  await initPrimes();
   resize();
   window.addEventListener('resize', resize);
   document.getElementById('loading').style.display = 'none';
@@ -1753,10 +1854,7 @@ function setupUI() {
 
   function updateMinUI() {
     if (inpMin) inpMin.value = formatNumber(minNumber);
-    if (window.updateMinNumber) window.updateMinNumber(minNumber); // This is defined where? in index? No, actually window.updateMinNumber was calls to spiral.. wait. 
-    // Actually spiral.js IS where updateMinNumber/updateMaxNumber logic resides usually.
-    // If those were defined in spiral.js properly, we can call them directly.
-    if (typeof updateMinNumber === 'function') updateMinNumber(minNumber);
+    if (window.updateMinNumber) window.updateMinNumber(minNumber);
   }
 
   if (inpMin) {
@@ -1795,7 +1893,7 @@ function setupUI() {
 
     function updateMaxUI() {
       inpMax.value = formatNumber(maxNumber);
-      if (typeof updateMaxNumber === 'function') updateMaxNumber(maxNumber);
+      if (window.updateMaxNumber) window.updateMaxNumber(maxNumber);
     }
 
     document.getElementById('btn-dec-100k')?.addEventListener('click', () => {
@@ -1818,6 +1916,10 @@ function setupUI() {
 }
 
 // Start
-init();
+init().catch((e) => {
+  console.error("[Spiral] Initialization failed", e);
+  const loading = document.getElementById('loading');
+  if (loading) loading.innerText = "Initialization failed. See console.";
+});
 setupUI();
 
