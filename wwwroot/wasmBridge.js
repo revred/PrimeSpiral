@@ -13,10 +13,12 @@ window.wasmEngine = {
             this.isReady = true;
             this.test();
             await this.setTransform(1, 120, true);
-            // Auto-build grid on init to unblock user immediately
-            this.buildGrid(2000000);
-            // Initialize Sharc database (non-blocking — runs after grid build)
-            this.initSharc(2000000).then(result => {
+            // Default max target: 373,587,883 (approx 20,000,000 primes)
+            const TARGET_LIMIT = 373587883;
+            // Auto-build grid on init
+            this.buildGrid(TARGET_LIMIT);
+            // Initialize Sharc database
+            this.initSharc(TARGET_LIMIT).then(result => {
                 console.log(`WASM: ${result}`);
                 this.sharcReady = true;
                 this._updateSharcHud(result);
@@ -99,7 +101,10 @@ window.wasmEngine = {
 
     sharcIsPrime: async function (n) {
         if (!this.sharcReady) return false;
-        return await DotNet.invokeMethodAsync('Sharp.Primer', 'SharcIsPrime', n);
+        // Logic: The absence of a number in the db indicates it is composite 
+        // till the limit of what is computed max prime number.
+        const result = await DotNet.invokeMethodAsync('Sharp.Primer', 'SharcIsPrime', n);
+        return result === true;
     },
 
     sharcGetPrimesInRange: async function (minN, maxN) {
@@ -130,7 +135,9 @@ window.wasmEngine = {
     _updateSharcHud: function (statusText) {
         const el = document.getElementById('sharc-status');
         if (el) {
-            el.innerHTML = `<span style="color:#0f0">${statusText}</span>`;
+            el.className = 'sharc-badge ok';
+            el.innerHTML = `<div style="width: 6px; height: 6px; border-radius: 50%; background: currentColor;"></div>SHARC OK`;
+            console.log(`[Sharc HUD] Updated: ${statusText}`);
         }
     },
 
@@ -160,42 +167,46 @@ window.wasmEngine = {
     }
 };
 
-// Manual start to handle non-root folder
-// Manual start to handle non-root folder
+// Initializer to handle engine setup once Blazor is ready
 (function () {
-    function startBlazor() {
-        console.log("WASM: Starting Blazor manually...");
-        // Helper to show error on screen
-        function showError(msg) {
-            const el = document.getElementById('loading');
-            if (el) {
-                el.innerText = "ERROR: " + msg;
-                el.style.color = "red";
-            }
-            console.error(msg);
-        }
+    const HUD_STATUS_ID = 'sharc-status';
 
-        try {
-            Blazor.start({
-                // Redirect resource loading to wwwroot/_framework
-                loadBootResource: function (type, name, defaultUri, integrity) {
-                    // console.log(`Loading: ${type} ${name}`); 
-                    return `wwwroot/_framework/${name}`;
-                }
-            }).then(() => {
-                console.log("WASM: Blazor started successfully");
-                window.wasmEngine.init();
-            }).catch(err => {
-                showError("Blazor Start Failed: " + err);
-            });
-        } catch (e) {
-            showError("Exception during start: " + e);
+    function updateHud(text, type) {
+        const el = document.getElementById(HUD_STATUS_ID);
+        if (el) {
+            el.className = `sharc-badge ${type}`;
+            el.innerHTML = `<div style="width: 6px; height: 6px; border-radius: 50%; background: currentColor;"></div>${text}`;
         }
     }
 
+    async function initBridge() {
+        console.log("WASM: Waiting for .NET 10 Runtime...");
+
+        const start = Date.now();
+        const timeout = 20000;
+
+        const checkRuntime = setInterval(async () => {
+            if (window.DotNet) {
+                clearInterval(checkRuntime);
+                console.log("WASM: .NET 10 Runtime Ready.");
+                try {
+                    await window.wasmEngine.init();
+                    console.log("WASM: Bridge Initialized.");
+                } catch (e) {
+                    console.error("WASM: Initialization Failed", e);
+                    updateHud("ENGINE ERROR", "error");
+                }
+            } else if (Date.now() - start > timeout) {
+                clearInterval(checkRuntime);
+                console.error("WASM: Timeout waiting for DotNet runtime.");
+                updateHud("ENGINE TIMEOUT", "error");
+            }
+        }, 100);
+    }
+
     if (document.readyState === 'complete') {
-        startBlazor();
+        initBridge();
     } else {
-        window.addEventListener('load', startBlazor);
+        window.addEventListener('load', initBridge);
     }
 })();
