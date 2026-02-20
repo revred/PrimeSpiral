@@ -63,9 +63,10 @@ public static class SharcPrimeStore
 
             // --- Step 3: Bulk insert primes with spiral coordinates ---
             int primeCount = 0;
+            for (int i = 0; i <= limit; i++) if (primeMap[i] == 1) primeCount++;
 
             // Build records as an enumerable for InsertBatch
-            var records = BuildPrimeRecords(limit, primeMap, coordX, coordY, out primeCount);
+            var records = BuildPrimeRecords(limit, primeMap, coordX, coordY);
             writer.InsertBatch("primes", records);
 
             // --- Step 4: Read bytes back and switch to OpenMemory ---
@@ -98,28 +99,20 @@ public static class SharcPrimeStore
         }
     }
 
-    private static List<Sharc.Core.ColumnValue[]> BuildPrimeRecords(
-        int limit, byte[] primeMap, double[] coordX, double[] coordY, out int primeCount)
+    private static IEnumerable<Sharc.Core.ColumnValue[]> BuildPrimeRecords(
+        int limit, byte[] primeMap, double[] coordX, double[] coordY)
     {
-        // Estimate: π(N) ≈ N / ln(N)
-        int estimate = limit > 10 ? (int)(limit / Math.Log(limit) * 1.15) : 10;
-        var records = new List<Sharc.Core.ColumnValue[]>(estimate);
-        primeCount = 0;
-
         for (int n = 2; n <= limit; n++)
         {
             if (primeMap[n] != 1) continue;
 
-            records.Add(new Sharc.Core.ColumnValue[]
+            yield return new Sharc.Core.ColumnValue[]
             {
                 (long)n,
                 coordX[n],
                 coordY[n]
-            });
-            primeCount++;
+            };
         }
-
-        return records;
     }
 
     // ═══════════════════════════════════════════════════════════════

@@ -353,7 +353,7 @@ function getAngleDiff(a1, a2) {
 var primeMap;
 var cacheX; // Legacy Support Only
 var cacheY; // Legacy Support Only
-var maxNumber = 2000000;
+var maxNumber = 20000000;
 var minNumber = 0; // New: Hollow Center
 // SPACING declared at top
 
@@ -939,47 +939,48 @@ function draw(timestamp) {
     // Special points are now handled in Layer 2 (Global Lists) for performance.
 
   } else {
-    // Pixel Mode - Hyper Optimized (Bit-Blit)
-    // 1. Get Prime Only chunks
+    // Pixel Mode - Hyper Optimized (Bit-Blit + LOD)
     const pQuery = grid.queryPrimes(tl.x, tl.y, br.x, br.y);
 
-    // 2. Prepare Buffer
-    // USE PHYSICAL DIMENSIONS for ImageData (Bit-Blit works in device pixels)
     const dpr = window.devicePixelRatio || 1;
-    const iW = canvas.width; // Physical
-    const iH = canvas.height; // Physical
+    const iW = canvas.width;
+    const iH = canvas.height;
     const imgData = ctx.createImageData(iW, iH);
     const buf32 = new Uint32Array(imgData.data.buffer);
 
-    // 3. Blit
-    // Color: Red (ABGR = 0xFF0000FF)
-    const COLOR = 0xFF0000FF;
-    // Background: #0d0d0d (ABGR = 0xFF0d0d0d)
     const BG_COLOR = 0xFF0d0d0d;
-
-    // Fill background (Robust clear + solid color)
     buf32.fill(BG_COLOR);
 
-    // Pre-calc transforms (Logical -> Physical)
+    // LOD Strategy: Downsample if scale is low to avoid "red blob" and redundant work
+    // Stride calculation: 1.0 scale = 1 stride, 0.05 scale = ~4 stride
+    const stride = scale < 0.1 ? Math.max(1, Math.floor(0.2 / scale)) : 1;
+
+    // Dim color for background blob to preserve structure (LOD Aesthetics)
+    const colorAlpha = scale < 0.1 ? 0.4 : 1.0;
+    const COLOR = (Math.floor(255 * colorAlpha) << 24) | 0x0000FF; // ABGR (approx red with alpha)
+    // Actually, ABGR 0xFF0000CC is better for "glowy red"
+    const FINAL_COLOR = scale < 0.05 ? 0xFF000055 : 0xFF0000FF;
+
     const offX = cx + ox;
     const offY = cy + oy;
 
     for (const chunk of pQuery.chunks) {
-      for (let i of chunk) {
-        // Project to Screen (Logical) then scale to Physical (DPR)
-        // x_phy = (worldX * scale + offX) * dpr
+      // Apply stride for downsampling
+      for (let j = 0; j < chunk.length; j += stride) {
+        const i = chunk[j];
+
         const sx = ((cacheX[i] * scale + offX) * dpr) | 0;
         const sy = ((cacheY[i] * scale + offY) * dpr) | 0;
 
         if (sx >= 0 && sx < iW && sy >= 0 && sy < iH) {
-          buf32[sy * iW + sx] = COLOR;
+          const pxIdx = sy * iW + sx;
+          // Occupancy Check: Only write if empty (ENERGY SAVER)
+          if (buf32[pxIdx] === BG_COLOR) {
+            buf32[pxIdx] = FINAL_COLOR;
+          }
         }
       }
     }
-
-    // Put at (0,0) (Physical)
-    // Note: putImageData ignores context transform, so it works directly in device pixels.
-    // However, our ctx might be scaled? putImageData resets to device coords.
     ctx.putImageData(imgData, 0, 0);
   }
 
@@ -1846,7 +1847,9 @@ function setupUI() {
   const inpMin = document.getElementById('inp-min');
 
   function formatNumber(num) {
-    return num.toLocaleString();
+    if (num >= 1000000) return (num / 1000000).toFixed(2) + 'M';
+    if (num >= 1000) return (num / 1000).toFixed(0) + 'K';
+    return num.toString();
   }
   function parseNumber(str) {
     return parseInt(str.replace(/,/g, ''), 10) || 0;

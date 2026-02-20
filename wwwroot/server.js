@@ -38,28 +38,43 @@ http.createServer(function (request, response) {
         url = '/index.html';
     }
 
-    // Framework Mapping (for local dev dev without correct importmap resolution in some envs)
-    const frameworkMap = {
-        '/_framework/blazor.webassembly.js': '/wwwroot/_framework/blazor.webassembly.66stpp682q.js',
-        '/_framework/dotnet.js': '/wwwroot/_framework/dotnet.w7hlke52b7.js',
-        '/_framework/dotnet.native.js': '/wwwroot/_framework/dotnet.native.ifql17yk5k.js',
-        '/_framework/dotnet.runtime.js': '/wwwroot/_framework/dotnet.runtime.2tx45g8lli.js',
-        '/wwwroot/_framework/blazor.webassembly.js': '/wwwroot/_framework/blazor.webassembly.66stpp682q.js',
-        '/wwwroot/_framework/dotnet.js': '/wwwroot/_framework/dotnet.w7hlke52b7.js',
-        '/wwwroot/_framework/dotnet.native.js': '/wwwroot/_framework/dotnet.native.ifql17yk5k.js',
-        '/wwwroot/_framework/dotnet.runtime.js': '/wwwroot/_framework/dotnet.runtime.2tx45g8lli.js'
-    };
+    // Framework Mapping (Dynamic Resolution for Hashed Files)
+    if (url.includes('/_framework/')) {
+        const parts = url.split('/_framework/');
+        const fileName = parts[1];
+        const searchDir = path.join(__dirname, '_framework');
 
-    if (frameworkMap[url]) {
-        url = frameworkMap[url];
+        if (fs.existsSync(searchDir)) {
+            const files = fs.readdirSync(searchDir);
+            // Match name.hash.ext or name.ext
+            const baseName = fileName.split('.')[0];
+            const ext = path.extname(fileName);
+            const match = files.find(f => f.startsWith(baseName) && f.endsWith(ext));
+
+            if (match) {
+                console.log(`[Framework Probing] Found ${fileName} -> ${match}`);
+                url = '/_framework/' + match;
+            } else {
+                console.warn(`[Framework Probing] No match for ${fileName} in ${searchDir}`);
+            }
+        }
     }
 
     // Resolve File Path
-    // __dirname is current dir (wwwroot)
+    // Serve everything from project root so index.html (at root) can resolve ./wwwroot/... paths
     const projectRoot = path.join(__dirname, '..');
     const wwwroot = __dirname;
 
     let filePath = path.join(projectRoot, url);
+
+    // If it's a root request for index.html, it's already in projectRoot
+    // If it's a request for a file that doesn't exist at root, try wwwroot
+    if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+        let altPath = path.join(wwwroot, url);
+        if (fs.existsSync(altPath) && !fs.statSync(altPath).isDirectory()) {
+            filePath = altPath;
+        }
+    }
     if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
         // Try inside wwwroot
         let altPath = path.join(wwwroot, url);

@@ -2,6 +2,8 @@
 
 window.wasmEngine = {
     isReady: false,
+    sharcReady: false,
+
     init: async function () {
         console.log("WASM: Initializing...");
         // Blazor is manually started below
@@ -13,6 +15,14 @@ window.wasmEngine = {
             await this.setTransform(1, 120, true);
             // Auto-build grid on init to unblock user immediately
             this.buildGrid(2000000);
+            // Initialize Sharc database (non-blocking — runs after grid build)
+            this.initSharc(2000000).then(result => {
+                console.log(`WASM: ${result}`);
+                this.sharcReady = true;
+                this._updateSharcHud(result);
+            }).catch(err => {
+                console.warn("WASM: Sharc init deferred:", err);
+            });
         } catch (e) {
             console.error("WASM: Initialization Failed", e);
         }
@@ -79,6 +89,49 @@ window.wasmEngine = {
         }
         // Direct call without benchmark logging here, usage is shifted to C# benchmark or internal logs
         return await DotNet.invokeMethodAsync('Sharp.Primer', 'GetDensityMap', maxNumber, rBins, thetaBins);
+    },
+
+    // ─── Sharc Database Methods ──────────────────────────────────
+    initSharc: async function (limit) {
+        if (!this.isReady) await this.waitForRuntime();
+        return await DotNet.invokeMethodAsync('Sharp.Primer', 'InitSharcStore', limit);
+    },
+
+    sharcIsPrime: async function (n) {
+        if (!this.sharcReady) return false;
+        return await DotNet.invokeMethodAsync('Sharp.Primer', 'SharcIsPrime', n);
+    },
+
+    sharcGetPrimesInRange: async function (minN, maxN) {
+        if (!this.sharcReady) return [];
+        return await DotNet.invokeMethodAsync('Sharp.Primer', 'SharcGetPrimesInRange', minN, maxN);
+    },
+
+    sharcGetNearestPrime: async function (x, y, maxDist) {
+        if (!this.sharcReady) return -1;
+        return await DotNet.invokeMethodAsync('Sharp.Primer', 'SharcGetNearestPrime', x, y, maxDist);
+    },
+
+    sharcGetSchema: async function () {
+        if (!this.sharcReady) return null;
+        return await DotNet.invokeMethodAsync('Sharp.Primer', 'SharcGetSchema');
+    },
+
+    sharcGetStats: async function () {
+        if (!this.sharcReady) return null;
+        return await DotNet.invokeMethodAsync('Sharp.Primer', 'SharcGetStats');
+    },
+
+    sharcBenchmarkSeek: async function (iterations) {
+        if (!this.sharcReady) return "Sharc not ready";
+        return await DotNet.invokeMethodAsync('Sharp.Primer', 'SharcBenchmarkSeek', iterations || 10000);
+    },
+
+    _updateSharcHud: function (statusText) {
+        const el = document.getElementById('sharc-status');
+        if (el) {
+            el.innerHTML = `<span style="color:#0f0">${statusText}</span>`;
+        }
     },
 
     // --- Benchmarks ---
