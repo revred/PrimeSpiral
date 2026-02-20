@@ -583,7 +583,7 @@ const dbgMin = document.getElementById('dbg-min');
 const dbgMax = document.getElementById('dbg-max');
 
 // --- UI STATE & HELPERS ---
-const UI = {
+var UI = {
   // Elements
   btnGrid: document.getElementById('btn-toggle-grid'),
   btnSq: document.getElementById('btn-toggle-sq'),
