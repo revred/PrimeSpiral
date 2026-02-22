@@ -13,15 +13,21 @@ window.wasmEngine = {
             this.isReady = true;
             this.test();
             await this.setTransform(1, 120, true);
-            // Default max target: 373,587,883 (approx 20,000,000 primes)
-            const TARGET_LIMIT = 373587883;
-            // Auto-build grid on init
-            this.buildGrid(TARGET_LIMIT);
-            // Initialize Sharc database
-            this.initSharc(TARGET_LIMIT).then(result => {
+            // Progressive Load:
+            // 1. Initial fast load (2M points)
+            const INITIAL_LIMIT = 2000000;
+            const FINAL_LIMIT = 500000000;
+
+            console.log("WASM: Initial fast load...");
+            this.buildGrid(INITIAL_LIMIT);
+            this.initSharc(INITIAL_LIMIT).then(result => {
                 console.log(`WASM: ${result}`);
                 this.sharcReady = true;
                 this._updateSharcHud(result);
+
+                // Note: The 500,000,000 background load was causing a System.OutOfMemoryException
+                // in the browser WASM engine. Keeping it disabled for now to ensure a stable visualization.
+                console.log("WASM: Background full load disabled to prevent OOM.");
             }).catch(err => {
                 console.warn("WASM: Sharc init deferred:", err);
             });
@@ -33,12 +39,22 @@ window.wasmEngine = {
     waitForRuntime: function () {
         return new Promise((resolve, reject) => {
             let attempts = 0;
-            const check = () => {
-                if (typeof DotNet !== 'undefined') {
-                    resolve();
-                } else {
+            const check = async () => {
+                try {
+                    if (typeof DotNet !== 'undefined' && DotNet.invokeMethodAsync) {
+                        // TEST CALL to verify dispatcher is actually ready
+                        await DotNet.invokeMethodAsync('Sharp.Primer', 'SayHello');
+                        console.log("WASM: Dispatcher confirmed ready.");
+                        resolve();
+                    } else {
+                        throw new Error("DotNet bridge not yet present");
+                    }
+                } catch (e) {
                     attempts++;
-                    if (attempts > 100) reject("Timeout waiting for DotNet");
+                    // "No call dispatcher" is the expected error while booting
+                    if (attempts % 50 === 0) console.log(`WASM: Waiting for dispatcher... (${attempts}) - Error: ${e.message}`);
+
+                    if (attempts > 300) reject("Timeout waiting for DotNet Dispatcher: " + e.message);
                     else setTimeout(check, 100);
                 }
             };
@@ -132,12 +148,12 @@ window.wasmEngine = {
         return await DotNet.invokeMethodAsync('Sharp.Primer', 'SharcBenchmarkSeek', iterations || 10000);
     },
 
-    _updateSharcHud: function (statusText) {
+    _updateSharcHud: function (statusText, type = 'ok') {
         const el = document.getElementById('sharc-status');
         if (el) {
-            el.className = 'sharc-badge ok';
-            el.innerHTML = `<div style="width: 6px; height: 6px; border-radius: 50%; background: currentColor;"></div>SHARC OK`;
-            console.log(`[Sharc HUD] Updated: ${statusText}`);
+            el.className = `sharc-badge ${type}`;
+            el.innerHTML = `<div style="width: 6px; height: 6px; border-radius: 50%; background: currentColor;"></div>${type === 'loading' ? 'SHARC LOADING' : 'SHARC OK'}`;
+            console.log(`[Sharc HUD] Updated (${type}): ${statusText}`);
         }
     },
 
@@ -181,6 +197,10 @@ window.wasmEngine = {
 
     async function initBridge() {
         console.log("WASM: Waiting for .NET 10 Runtime...");
+        if (window.Blazor && typeof Blazor.start === 'function') {
+            console.log("WASM: Manually starting Blazor...");
+            await Blazor.start();
+        }
 
         const start = Date.now();
         const timeout = 20000;

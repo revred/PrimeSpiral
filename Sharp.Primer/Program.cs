@@ -17,7 +17,7 @@ namespace Sharp.Primer
             // However, Blazor usually expects a root component.
             // Let's add a simple one if needed, or just run.
             
-            // builder.RootComponents.Add<App>("#app"); // usage
+            builder.RootComponents.Add<App>("#app");
             
             await builder.Build().RunAsync();
         }

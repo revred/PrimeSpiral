@@ -9,11 +9,15 @@ const canvasOverlay = document.getElementById('canvas-overlay');
 const ctxOverlay = canvasOverlay.getContext('2d');
 
 // --- DATA STATE ---
-let maxNumber = 373587883;
+const MAX_N = 20000000;
+let maxNumber = 2000000;
 let minNumber = 0;
-let primeMap = null;
-let cacheX = null;
-let cacheY = null;
+let primeMap = new Uint8Array(MAX_N + 1);
+let cacheX = new Float32Array(MAX_N + 1);
+let cacheY = new Float32Array(MAX_N + 1);
+let sievedMax = 1;
+let cachedMax = -1;
+let cachedR0 = -1;
 const SPACING = 1;
 
 // --- GLOBAL SETTINGS ---
@@ -26,11 +30,19 @@ const camera = new Camera(window.innerWidth / 2, window.innerHeight / 2);
 window.camera = camera;
 
 // --- UI BINDINGS ---
-const elPrimes = document.getElementById('disp-primes');
+const elVisible = document.getElementById('disp-visible');
 const elFps = document.getElementById('disp-fps');
 const elTooltip = document.getElementById('tooltip');
 const elTooltipN = document.getElementById('tooltip-n');
 const elTooltipSeq = document.getElementById('tooltip-seq');
+
+// Diagnostics Panel
+const dbgZoom = document.getElementById('dbg-zoom');
+const dbgVisibleCount = document.getElementById('dbg-visible-count');
+const dbgOffset = document.getElementById('dbg-offset');
+const dbgMin = document.getElementById('dbg-min');
+const dbgMax = document.getElementById('dbg-max');
+const dbgRes = document.getElementById('dbg-res');
 
 // --- VERTICAL RANGE SLIDER ---
 const sliderTrack = document.querySelector('.slider-track');
@@ -41,9 +53,10 @@ let isDraggingMax = false;
 let isDraggingMin = false;
 
 function updateSliderUI() {
+  if (!sliderTrack || !sliderMaxHandle || !sliderMinHandle) return;
   const trackRect = sliderTrack.getBoundingClientRect();
-  const maxPerc = (1 - (maxNumber / 373587883)) * 100;
-  const minPerc = (1 - (minNumber / 373587883)) * 100;
+  const maxPerc = (1 - (maxNumber / 20000000)) * 100;
+  const minPerc = (1 - (minNumber / 20000000)) * 100;
 
   sliderMaxHandle.style.top = `${maxPerc}%`;
   sliderMinHandle.style.top = `${minPerc}%`;
@@ -69,16 +82,86 @@ function handleSliderMove(e) {
   updateSliderUI();
 }
 
-sliderMaxHandle.onmousedown = () => isDraggingMax = true;
-sliderMinHandle.onmousedown = () => isDraggingMin = true;
+if (sliderMaxHandle) sliderMaxHandle.onmousedown = () => isDraggingMax = true;
+if (sliderMinHandle) sliderMinHandle.onmousedown = () => isDraggingMin = true;
 window.onmouseup = () => { isDraggingMax = false; isDraggingMin = false; };
 window.onmousemove = handleSliderMove;
 
 // Touch support
-sliderMaxHandle.ontouchstart = (e) => { isDraggingMax = true; e.preventDefault(); };
-sliderMinHandle.ontouchstart = (e) => { isDraggingMin = true; e.preventDefault(); };
+if (sliderMaxHandle) sliderMaxHandle.ontouchstart = (e) => { isDraggingMax = true; e.preventDefault(); };
+if (sliderMinHandle) sliderMinHandle.ontouchstart = (e) => { isDraggingMin = true; e.preventDefault(); };
 window.ontouchend = () => { isDraggingMax = false; isDraggingMin = false; };
 window.ontouchmove = handleSliderMove;
+
+// --- INPUT HANDLER (Restored from main) ---
+class InputHandler {
+  constructor(canvas, camera, onRedraw) {
+    this.canvas = canvas;
+    this.camera = camera;
+    this.onRedraw = onRedraw;
+
+    this.isDragging = false;
+    this.lastX = 0;
+    this.lastY = 0;
+
+    this.worldX = 0;
+    this.worldY = 0;
+    this.bindEvents();
+  }
+
+  bindEvents() {
+    const c = this.canvas;
+
+    // Wheel (Zoom)
+    c.addEventListener('wheel', (e) => {
+      e.preventDefault();
+      const zoomIntensity = 0.15;
+      const direction = e.deltaY < 0 ? 1 : -1;
+      const factor = Math.exp(direction * zoomIntensity);
+
+      this.camera.zoomTo(e.clientX, e.clientY, factor);
+      this.requestUpdate();
+    }, { passive: false });
+
+    // Drag (Pan)
+    c.addEventListener('mousedown', (e) => {
+      this.isDragging = true;
+      this.lastX = e.clientX;
+      this.lastY = e.clientY;
+      c.style.cursor = 'grabbing';
+    });
+
+    window.addEventListener('mouseup', () => {
+      this.isDragging = false;
+      c.style.cursor = 'crosshair';
+    });
+
+    window.addEventListener('mousemove', (e) => {
+      const wp = this.camera.screenToWorld(e.clientX, e.clientY);
+      this.worldX = wp.x;
+      this.worldY = wp.y;
+
+      if (this.isDragging) {
+        const dx = e.clientX - this.lastX;
+        const dy = e.clientY - this.lastY;
+        this.camera.panBy(dx, dy);
+        this.lastX = e.clientX;
+        this.lastY = e.clientY;
+        this.requestUpdate();
+      } else {
+        // Node hover raycast triggers automatically in drawOverlay via checking worldX/Y
+        this.requestUpdate();
+      }
+    });
+  }
+
+  requestUpdate() {
+    if (this.onRedraw) this.onRedraw();
+  }
+}
+
+const inputController = new InputHandler(canvasOverlay, camera, () => requestAnimationFrame(draw));
+
 
 // --- GRID ENGINE (JS Fallback) ---
 class SpiralGrid {
@@ -89,9 +172,8 @@ class SpiralGrid {
   key(x, y) { return `${Math.floor(x / this.cellSize)},${Math.floor(y / this.cellSize)}`; }
   build() {
     this.primeChunks.clear();
-    if (!cacheX) return;
     for (let i = minNumber; i <= maxNumber; i++) {
-      if (primeMap && primeMap[i] === 1) {
+      if (primeMap[i] === 1) {
         const k = this.key(cacheX[i], cacheY[i]);
         if (!this.primeChunks.has(k)) this.primeChunks.set(k, []);
         this.primeChunks.get(k).push(i);
@@ -114,54 +196,97 @@ const grid = new SpiralGrid();
 
 // --- CORE LOGIC ---
 async function init() {
-  allocateBuffers(maxNumber);
+  maxNumber = 2000000;
   await initPrimes();
   updateCache();
   updateSliderUI();
+
+  // Hide the initialization overlay now that we're ready to render
+  const loadingEl = document.getElementById('loading');
+  if (loadingEl) loadingEl.style.display = 'none';
+
   requestAnimationFrame(draw);
 }
 
 function allocateBuffers(max) {
+  // Pre-allocated globally. 
   maxNumber = max;
-  primeMap = new Uint8Array(maxNumber + 1);
-  cacheX = new Float32Array(maxNumber + 1);
-  cacheY = new Float32Array(maxNumber + 1);
 }
 
 async function initPrimes() {
-  if (window.wasmEngine && window.wasmEngine.isReady) {
-    const wasmMap = await window.wasmEngine.getPrimeMap(maxNumber);
-    if (wasmMap) primeMap = wasmMap;
+  if (sievedMax >= maxNumber) {
+    updateCache();
+    return;
   }
-  if (!primeMap) {
-    // Simple Sieve Fallback
-    primeMap.fill(1); primeMap[0] = primeMap[1] = 0;
-    for (let i = 2; i * i <= maxNumber; i++) {
-      if (primeMap[i]) for (let j = i * i; j <= maxNumber; j += i) primeMap[j] = 0;
+
+  if (sievedMax <= 1) {
+    primeMap.fill(1);
+    primeMap[0] = primeMap[1] = 0;
+    sievedMax = 1;
+  }
+
+  // Sieve the remaining numbers incrementally
+  const start = Math.max(2, sievedMax + 1);
+  const root = Math.floor(Math.sqrt(maxNumber));
+
+  // Outer loop to clear multiples
+  for (let i = 2; i <= root; i++) {
+    if (primeMap[i]) {
+      // Find the first multiple of i that is >= start
+      let startMultiple = Math.max(i * i, Math.ceil(start / i) * i);
+      for (let j = startMultiple; j <= maxNumber; j += i) {
+        primeMap[j] = 0;
+      }
     }
   }
+  sievedMax = maxNumber;
   updateCache();
 }
 
 function updateCache() {
   const PI2 = Math.PI * 2;
-  for (let i = 0; i <= maxNumber; i++) {
-    const root = Math.sqrt(i);
-    const theta = root * PI2;
-    cacheX[i] = -Math.cos(theta) * root;
-    cacheY[i] = Math.sin(theta) * root;
+  const elWarp = document.getElementById('toggle-warp');
+  const elR0 = document.getElementById('warp-r0');
+  const isWarp = elWarp ? elWarp.checked : false;
+  const r0 = isWarp && elR0 ? parseFloat(elR0.value) : 0;
+
+  // Determine if we need a full rebuild (warp changing) or incremental
+  const fullRebuild = (cachedR0 !== r0);
+  const startIdx = fullRebuild ? 0 : Math.max(0, cachedMax + 1);
+
+  if (startIdx <= maxNumber) {
+    for (let i = startIdx; i <= maxNumber; i++) {
+      let rootVal;
+      if (r0 > 0) {
+        rootVal = Math.sqrt(i + r0 * r0) - r0;
+      } else {
+        rootVal = Math.sqrt(i);
+      }
+      const theta = rootVal * PI2;
+      cacheX[i] = -Math.cos(theta) * rootVal;
+      cacheY[i] = Math.sin(theta) * rootVal;
+    }
   }
+
+  cachedMax = maxNumber;
+  cachedR0 = r0;
+
   grid.build();
   if (window.wasmEngine && window.wasmEngine.isReady) {
-    window.wasmEngine.setTransform(SPACING, 0, false).then(() => window.wasmEngine.buildGrid(maxNumber));
+    window.wasmEngine.setTransform(SPACING, r0, false).then(() => window.wasmEngine.buildGrid(maxNumber));
   }
 }
 
 window.updateMaxNumber = (val) => {
   if (val > 20000000) val = 20000000;
   if (val === maxNumber) return;
-  allocateBuffers(val);
-  initPrimes();
+
+  maxNumber = val;
+
+  // Yield to UI Thread before freezing
+  setTimeout(() => {
+    initPrimes().then(() => requestAnimationFrame(draw));
+  }, 20);
 };
 
 // --- RENDER CLOUD ---
@@ -179,9 +304,9 @@ function draw() {
   const pQuery = grid.queryPrimes(tl, br);
   const count = pQuery.count;
 
-  ctx.clearRect(0, 0, W, H);
+  ctx.clearRect(0, 0, canvas.width, canvas.height);
   ctx.fillStyle = "#000";
-  ctx.fillRect(0, 0, W, H);
+  ctx.fillRect(0, 0, canvas.width, canvas.height);
 
   const scale = camera.renderScale;
   const offX = camera.centerX + camera.renderOffset.x;
@@ -211,6 +336,7 @@ function draw() {
   } else {
     // VECTOR MODE
     ctx.save();
+    ctx.scale(dpr, dpr);
     ctx.translate(offX, offY);
     ctx.scale(scale, scale);
     ctx.fillStyle = "#FF3B30";
@@ -224,8 +350,15 @@ function draw() {
   }
 
   // UI Updates
-  if (elPrimes) elPrimes.innerText = count.toLocaleString();
+  if (elVisible) elVisible.innerText = count.toLocaleString();
+  if (dbgVisibleCount) dbgVisibleCount.innerText = count.toLocaleString();
   if (elFps) elFps.innerText = Math.round(1000 / (performance.now() - start + 1)) + " FPS";
+
+  if (dbgRes) dbgRes.innerText = `${Math.round(W)}x${Math.round(H)}`;
+  if (dbgZoom) dbgZoom.innerText = camera.renderScale.toFixed(4);
+  if (dbgOffset) dbgOffset.innerText = `${Math.round(camera.renderOffset.x)}, ${Math.round(camera.renderOffset.y)}`;
+  if (dbgMin) dbgMin.innerText = `${Math.round(tl.x)}, ${Math.round(tl.y)}`;
+  if (dbgMax) dbgMax.innerText = `${Math.round(br.x)}, ${Math.round(br.y)}`;
 
   drawOverlay();
   if (camera.isMoving) requestAnimationFrame(draw);
@@ -240,7 +373,7 @@ function drawOverlay() {
     renderPearl(hoveredPrime);
     showTooltip(hoveredPrime);
   } else {
-    elTooltip.style.display = 'none';
+    if (elTooltip) elTooltip.style.display = 'none';
   }
 }
 
@@ -306,25 +439,118 @@ function resize() {
   requestAnimationFrame(draw);
 }
 
-const inputHandler = new InputHandler(canvasOverlay, camera, () => {
-  const wx = window.mouseWorldX;
-  const wy = window.mouseWorldY;
+function getNearestPrime(worldX, worldY, maxRadius) {
+  let bestDistSq = maxRadius * maxRadius;
+  let bestId = null;
 
-  const searchRad = 50 / camera.renderScale;
-  if (window.wasmEngine && window.wasmEngine.isReady) {
-    window.wasmEngine.getNeighborhoodIds(wx, wy, searchRad, 5).then(ids => {
-      if (ids && ids.length > 0) {
-        hoveredPrime = ids[0];
-        hoveredNeighbors = []; // Hydrate if needed
-        requestAnimationFrame(draw);
-      } else {
-        hoveredPrime = null;
-        requestAnimationFrame(draw);
+  // Optimize: Only search chunks near the mouse
+  const cx = Math.floor(worldX / grid.cellSize);
+  const cy = Math.floor(worldY / grid.cellSize);
+
+  for (let oy = -1; oy <= 1; oy++) {
+    for (let ox = -1; ox <= 1; ox++) {
+      const chunk = grid.primeChunks.get(`${cx + ox},${cy + oy}`);
+      if (chunk) {
+        for (let i of chunk) {
+          const dx = cacheX[i] - worldX;
+          const dy = cacheY[i] - worldY;
+          const dSq = dx * dx + dy * dy;
+          if (dSq < bestDistSq) {
+            bestDistSq = dSq;
+            bestId = i;
+          }
+        }
       }
-    });
+    }
+  }
+  return bestId;
+}
+
+const inputHandler = new InputHandler(canvasOverlay, camera, () => {
+  const wx = window.mouseWorldX || (inputHandler ? inputHandler.worldX : 0);
+  const wy = window.mouseWorldY || (inputHandler ? inputHandler.worldY : 0);
+
+  const searchRad = 20 / camera.renderScale; // 20 pixels max hover distance
+  const nearestId = getNearestPrime(wx, wy, searchRad);
+
+  if (nearestId !== null) {
+    hoveredPrime = nearestId;
+    hoveredNeighbors = [];
+    requestAnimationFrame(draw);
+  } else {
+    if (hoveredPrime !== null) {
+      hoveredPrime = null;
+      requestAnimationFrame(draw);
+    }
   }
 });
 
+function initUI() {
+  const bindClick = (id, fn) => {
+    const el = document.getElementById(id);
+    if (!el) return;
+    el.addEventListener('click', (e) => { e.preventDefault(); fn(e); });
+    el.addEventListener('touchstart', (e) => { e.preventDefault(); fn(e); }, { passive: false });
+  };
+
+  const updateMin = (val) => {
+    minNumber = Math.max(0, Math.min(maxNumber - 100, val));
+    const el = document.getElementById('inp-min');
+    if (el) el.value = minNumber;
+    updateSliderUI();
+    requestAnimationFrame(draw);
+  };
+
+  bindClick('btn-dec-min-1k', () => updateMin(minNumber - 1000));
+  bindClick('btn-dec-min-100', () => updateMin(minNumber - 100));
+  bindClick('btn-inc-min-100', () => updateMin(minNumber + 100));
+  bindClick('btn-inc-min-1k', () => updateMin(minNumber + 1000));
+
+  const elInpMin = document.getElementById('inp-min');
+  if (elInpMin) {
+    elInpMin.addEventListener('change', (e) => updateMin(parseInt(e.target.value.replace(/,/g, '')) || 0));
+  }
+
+  const updateMax = (val) => {
+    const nextMax = Math.max(minNumber + 100, Math.min(20000000, val));
+    const el = document.getElementById('inp-max');
+    if (el) el.value = nextMax > 999999 ? (nextMax / 1000000).toFixed(1) + 'M' : nextMax;
+    updateMaxNumber(nextMax);
+  };
+
+  bindClick('btn-dec-100k', () => updateMax(maxNumber - 100000));
+  bindClick('btn-dec-10k', () => updateMax(maxNumber - 10000));
+  bindClick('btn-inc-10k', () => updateMax(maxNumber + 10000));
+  bindClick('btn-inc-100k', () => updateMax(maxNumber + 100000));
+
+  const elInpMax = document.getElementById('inp-max');
+  if (elInpMax) {
+    elInpMax.addEventListener('change', (e) => {
+      let valStr = e.target.value.replace(/,/g, '').toUpperCase();
+      let val = parseFloat(valStr);
+      if (valStr.includes('M')) val *= 1000000;
+      else if (valStr.includes('K')) val *= 1000;
+      updateMax(val || 2000000);
+    });
+  }
+
+  const elWarpToggle = document.getElementById('toggle-warp');
+  const elWarpR0 = document.getElementById('warp-r0');
+  const elDispR0 = document.getElementById('disp-r0');
+
+  if (elWarpToggle) {
+    elWarpToggle.addEventListener('change', () => { updateCache(); requestAnimationFrame(draw); });
+  }
+  if (elWarpR0) {
+    elWarpR0.addEventListener('input', (e) => {
+      if (elDispR0) elDispR0.innerText = e.target.value;
+      updateCache();
+      requestAnimationFrame(draw);
+    });
+  }
+}
+
 // Start
 resize();
+initUI();
 init();

@@ -5,14 +5,7 @@
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
   <title>High-Performance Sacks Spiral (Warp + Culling)</title>
-  <script type="importmap">{
-  "imports": {
-    "./_framework/blazor.webassembly.js": "./_framework/blazor.webassembly.js",
-    "./_framework/dotnet.js": "./_framework/dotnet.js",
-    "./_framework/dotnet.native.js": "./_framework/dotnet.native.js",
-    "./_framework/dotnet.runtime.js": "./_framework/dotnet.runtime.js"
-  }
-}</script>
+
   <style>
     body {
       margin: 0;
@@ -565,200 +558,165 @@
         el.innerHTML = `<span style="color:orange; font-weight:bold;">UNHANDLED PROMISE:</span><br>${event.reason}`;
       }
     });
+    function togglePanel(panelName) {
+      const exp = document.getElementById('explorer-content');
+      const diag = document.getElementById('debug-content');
+      if (panelName === 'explorer') {
+        exp.style.display = exp.style.display === 'none' ? 'block' : 'none';
+        if (exp.style.display === 'block') diag.style.display = 'none';
+      } else {
+        diag.style.display = diag.style.display === 'none' ? 'block' : 'none';
+        if (diag.style.display === 'block') exp.style.display = 'none';
+      }
+    }
   </script>
 </head>
 
 <body>
   <div id="loading">initializing...</div>
 
-  <div id="debug-hud"
-    style="position:absolute; top:10px; right:10px; background:rgba(0,0,0,0.85); color:#0f0; padding:12px; font-family:monospace; font-size:11px; pointer-events:none; z-index:9999; border:1px solid #0f0; border-radius:4px; line-height:1.5;">
-    <div
-      style="color:#fff; border-bottom:1px solid #0f0; margin-bottom:5px; padding-bottom:5px; font-weight:bold; display:flex; justify-content:space-between; align-items:center;">
-      <span>DIAGNOSTICS</span>
-      <button id="btn-profile-hud" title="Run Profile (2s)"
-        style="background:none; border:none; cursor:pointer; color:#0f0; padding:0;">
-        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-          <circle cx="12" cy="12" r="10"></circle>
-          <polyline points="12 6 12 12 16 14"></polyline>
-        </svg>
-      </button>
-    </div>
-    <div id="disp-profile-results"
-      style="font-size:9px; color:#aaa; margin-bottom:5px; white-space:pre-wrap; display:none;"></div>
-    <div>Zoom: <span id="dbg-zoom">1.0000</span></div>
-    <div>Visible: <span id="dbg-visible-count">0</span></div>
-    <div>Strategy: <span id="dbg-strategy-val">N/A</span></div>
-    <div>Offset: <span id="dbg-offset">0, 0</span></div>
-    <div>Bounds Min: <span id="dbg-min">0, 0</span></div>
-    <div>Bounds Max: <span id="dbg-max">0, 0</span></div>
-    <div style="margin-top:5px; font-size:10px; color:#888; border-top:1px dashed #333; padding-top:2px;">
-      Threshold(Z): <span id="val-zmin">2.0</span> | Persistence: <span id="val-pmin">20%</span>
-    </div>
-    <div style="margin-top:5px; padding-top:5px; border-top:1px dashed #0f0;">
-      <div>DPR: <span id="dbg-dpr">1.0</span></div>
-      <div>Res: <span id="dbg-res">0x0</span></div>
-      <div>Res: <span id="dbg-res">0x0</span></div>
-      <div>Mouse: <span id="dbg-mouse">0, 0</span></div>
-      <div style="margin-top:4px; border-top:1px dashed #444; padding-top:2px;">
-        <span id="dbg-counts" style="color:#aaa; font-size:10px;">Counts: -</span>
-      </div>
-    </div>
-    <div style="margin-top:15px; border-top:1px solid #0f0; padding-top:10px;">
-      <div style="font-weight:bold; color:#fff; border-bottom:1px solid #444; margin-bottom:5px;">POINT INSPECTOR</div>
-      <div id="inspector-content" style="min-height:40px; color:#ddd;">
-        <span style="color:#666;">-- SCANNING --</span>
-      </div>
-    </div>
-    <div style="margin-top:15px; border-top:1px solid #39f; padding-top:10px;">
-      <div style="font-weight:bold; color:#39f; border-bottom:1px solid #444; margin-bottom:5px;">SHARC DATABASE</div>
-      <div id="sharc-status" style="min-height:20px; color:#ddd; font-size:10px;">
-        <span style="color:#666;">-- INITIALIZING --</span>
-      </div>
-    </div>
-  </div>
 
-  <!-- Polar Strip Panel -->
-  <div id="polar-panel"
-    style="position:absolute; bottom:0; left:0; width:100%; height:160px; background:rgba(0,0,0,0.95); border-top:1px solid #444; z-index:1000; display:flex; flex-direction:column;">
-    <div
-      style="height:20px; background:#111; border-bottom:1px solid #333; display:flex; justify-content:space-between; align-items:center; padding:0 10px;">
-      <span style="font-size:10px; color:#888; font-weight:bold;">POLAR DENSITY STRIP (THE GHOST IMAGE)</span>
-      <button id="btn-toggle-msg"
-        style="background:none; border:none; color:#666; font-size:10px; cursor:pointer;">[-]</button>
-    </div>
-    <div style="flex:1; position:relative; overflow:hidden;">
-      <canvas id="polar-strip" style="width:100%; height:100%; display:block;"></canvas>
-      <!-- Overlay for Fibres -->
-      <canvas id="polar-overlay"
-        style="position:absolute; top:0; left:0; width:100%; height:100%; pointer-events:none;"></canvas>
-    </div>
-  </div>
 
   <div id="ui-layer">
-    <div class="panel">
-      <h1>SACKS SPIRAL EXPLORER</h1>
+    <div class="panel" style="padding: 0;">
 
-      <div
-        style="font-size:11px; color:#0f0; font-weight:bold; margin-bottom:5px; display:flex; justify-content:space-between; align-items:center;">
-        <span>DYNAMIC FLUX (FIBER MARKER)</span>
-      </div>
+      <!-- EXPLORER ACCORDION (Native HTML5 Details) -->
+      <details name="main-accordion" open style="padding: 12px; border-bottom: 1px solid #333;">
+        <summary
+          style="cursor:pointer; font-size: 16px; font-weight: bold; outline: none; display: flex; justify-content: space-between; align-items: center; list-style: none;">
+          EXPLORER
+          <span style="font-size:12px; color:#666; font-weight: normal;">(Tap to Toggle)</span>
+        </summary>
 
+        <div id="explorer-content" style="margin-top: 15px;">
+          <div
+            style="font-size:11px; color:#0f0; font-weight:bold; margin-bottom:5px; display:flex; justify-content:space-between; align-items:center;">
+            <span>DYNAMIC FLUX (FIBER MARKER)</span>
+          </div>
 
+          <div style="margin-bottom:10px;">
+            <div style="font-size:11px; color:#aaa; margin-bottom:4px;">MIN NUMBER (HOLLOW)</div>
+            <div style="display:flex; gap:5px; align-items:center;">
+              <button id="btn-dec-min-1k"
+                style="background:#222; border:1px solid #444; color:#ff5555; padding:4px 8px; cursor:pointer; font-size:10px; border-radius:4px; font-weight:bold;">1K-</button>
+              <button id="btn-dec-min-100"
+                style="background:#222; border:1px solid #444; color:#ff5555; padding:4px 6px; cursor:pointer; font-size:10px; border-radius:4px; font-weight:bold;">100-</button>
 
-      <div style="margin-bottom:10px;">
-        <div style="font-size:11px; color:#aaa; margin-bottom:4px;">MIN NUMBER (HOLLOW)</div>
-        <div style="display:flex; gap:5px; align-items:center;">
-          <button id="btn-dec-min-1k"
-            style="background:#222; border:1px solid #444; color:#ff5555; padding:4px 8px; cursor:pointer; font-size:10px; border-radius:4px; font-weight:bold;">1K-</button>
-          <button id="btn-dec-min-100"
-            style="background:#222; border:1px solid #444; color:#ff5555; padding:4px 6px; cursor:pointer; font-size:10px; border-radius:4px; font-weight:bold;">100-</button>
+              <input id="inp-min" type="text" value="0"
+                style="flex:1; background:#111; border:1px solid #444; color:#fff; padding:6px; font-family:monospace; font-size:12px; text-align:center; border-radius:4px;">
 
-          <input id="inp-min" type="text" value="0"
-            style="flex:1; background:#111; border:1px solid #444; color:#fff; padding:6px; font-family:monospace; font-size:12px; text-align:center; border-radius:4px;">
+              <button id="btn-inc-min-100"
+                style="background:#222; border:1px solid #444; color:#00ff00; padding:4px 6px; cursor:pointer; font-size:10px; border-radius:4px; font-weight:bold;">100+</button>
+              <button id="btn-inc-min-1k"
+                style="background:#222; border:1px solid #444; color:#00ff00; padding:4px 8px; cursor:pointer; font-size:10px; border-radius:4px; font-weight:bold;">1K+</button>
+            </div>
+          </div>
 
-          <button id="btn-inc-min-100"
-            style="background:#222; border:1px solid #444; color:#00ff00; padding:4px 6px; cursor:pointer; font-size:10px; border-radius:4px; font-weight:bold;">100+</button>
-          <button id="btn-inc-min-1k"
-            style="background:#222; border:1px solid #444; color:#00ff00; padding:4px 8px; cursor:pointer; font-size:10px; border-radius:4px; font-weight:bold;">1K+</button>
+          <div style="margin-bottom:10px;">
+            <div style="font-size:11px; color:#aaa; margin-bottom:4px;">MAX NUMBER</div>
+            <div style="display:flex; gap:5px; align-items:center;">
+              <!-- Steppers Left -->
+              <button id="btn-dec-100k"
+                style="background:#222; border:1px solid #444; color:#ff5555; padding:4px 8px; cursor:pointer; font-size:10px; border-radius:4px; font-weight:bold;">100K-</button>
+              <button id="btn-dec-10k"
+                style="background:#222; border:1px solid #444; color:#ff5555; padding:4px 6px; cursor:pointer; font-size:10px; border-radius:4px; font-weight:bold;">10K-</button>
+
+              <!-- Input Display -->
+              <input id="inp-max" type="text" value="2.0M"
+                style="flex:1; background:#111; border:1px solid #444; color:#fff; padding:6px; font-family:monospace; font-size:12px; text-align:center; border-radius:4px;">
+
+              <!-- Steppers Right -->
+              <button id="btn-inc-10k"
+                style="background:#222; border:1px solid #444; color:#00ff00; padding:4px 6px; cursor:pointer; font-size:10px; border-radius:4px; font-weight:bold;">10K+</button>
+              <button id="btn-inc-100k"
+                style="background:#222; border:1px solid #444; color:#00ff00; padding:4px 8px; cursor:pointer; font-size:10px; border-radius:4px; font-weight:bold;">100K+</button>
+            </div>
+            <!-- Hidden button for legacy logic if needed, or we remap functionality -->
+            <button id="btn-update-max" style="display:none;"></button>
+          </div>
+          <div class="stat-row"><span>Visible Nodes:</span> <span class="stat-val" id="disp-visible">0</span></div>
+          <div class="stat-row"><span>Strategy:</span> <span class="stat-val" id="disp-strategy">AUTO</span></div>
+          <div class="stat-row"><span>FPS:</span> <span class="stat-val" id="disp-fps">60</span></div>
+          <div class="stat-row"><span>Render Time:</span> <span class="stat-val" id="disp-render-time">0ms</span></div>
+
+          <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
+
+          <label><input type="checkbox" id="toggle-warp" checked> Compress near origin</label>
+
+          <div class="small" style="margin-top:8px;">
+            Warp strength (R0)
+            <input id="warp-r0" type="range" min="10" max="500" value="120">
+            <canvas id="warp-graph" width="220" height="50"
+              style="width:100%; height:50px; background:rgba(0,0,0,0.2); border-radius:4px; margin-top:5px;"></canvas>
+            <div class="stat-row" style="margin-top:6px;">
+              <span>R0:</span> <span class="stat-val" id="disp-r0">120</span>
+            </div>
+          </div>
+
+          <div class="small" style="margin-top:10px; line-height:1.35;">
+            <b>Controls:</b> Wheel = Zoom, Drag = Pan, Hover/Tap = Snap tooltip<br>
+            <b>Mobile:</b> Drag = Pan, Pinch = Zoom, Double-tap = Zoom-in<br>
+            <b>Tip:</b> Increase R0 to squeeze inner region harder.
+          </div>
         </div>
-      </div>
+      </details>
 
-      <div style="margin-bottom:10px;">
-        <div style="font-size:11px; color:#aaa; margin-bottom:4px;">MAX NUMBER</div>
-        <div style="display:flex; gap:5px; align-items:center;">
-          <!-- Steppers Left -->
-          <button id="btn-dec-100k"
-            style="background:#222; border:1px solid #444; color:#ff5555; padding:4px 8px; cursor:pointer; font-size:10px; border-radius:4px; font-weight:bold;">100K-</button>
-          <button id="btn-dec-10k"
-            style="background:#222; border:1px solid #444; color:#ff5555; padding:4px 6px; cursor:pointer; font-size:10px; border-radius:4px; font-weight:bold;">10K-</button>
+      <!-- DIAGNOSTICS ACCORDION (Native HTML5 Details) -->
+      <details name="main-accordion" style="padding: 12px;">
+        <summary
+          style="cursor:pointer; font-size: 16px; font-weight: bold; outline: none; display: flex; justify-content: space-between; align-items: center; list-style: none;">
+          DIAGNOSTICS
+          <span style="font-size:12px; color:#666; font-weight: normal;">(Tap to Toggle)</span>
+        </summary>
 
-          <!-- Input Display -->
-          <input id="inp-max" type="text" value="2.0M"
-            style="flex:1; background:#111; border:1px solid #444; color:#fff; padding:6px; font-family:monospace; font-size:12px; text-align:center; border-radius:4px;">
-
-          <!-- Steppers Right -->
-          <button id="btn-inc-10k"
-            style="background:#222; border:1px solid #444; color:#00ff00; padding:4px 6px; cursor:pointer; font-size:10px; border-radius:4px; font-weight:bold;">10K+</button>
-          <button id="btn-inc-100k"
-            style="background:#222; border:1px solid #444; color:#00ff00; padding:4px 8px; cursor:pointer; font-size:10px; border-radius:4px; font-weight:bold;">100K+</button>
+        <div id="debug-content"
+          style="margin-top: 15px; font-family:monospace; font-size:11px; color:#0f0; line-height:1.5;">
+          <div style="display:flex; justify-content:flex-end; margin-bottom:5px;">
+            <button id="btn-profile-hud" title="Run Profile (2s)"
+              style="background:none; border:none; cursor:pointer; color:#0f0; padding:0;"
+              onclick="event.stopPropagation();">
+              <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+                <circle cx="12" cy="12" r="10"></circle>
+                <polyline points="12 6 12 12 16 14"></polyline>
+              </svg>
+            </button>
+          </div>
+          <div id="disp-profile-results"
+            style="font-size:9px; color:#aaa; margin-bottom:5px; white-space:pre-wrap; display:none;"></div>
+          <div>Zoom: <span id="dbg-zoom">1.0000</span></div>
+          <div>Visible: <span id="dbg-visible-count">0</span></div>
+          <div>Strategy: <span id="dbg-strategy-val">N/A</span></div>
+          <div>Offset: <span id="dbg-offset">0, 0</span></div>
+          <div>Bounds Min: <span id="dbg-min">0, 0</span></div>
+          <div>Bounds Max: <span id="dbg-max">0, 0</span></div>
+          <div style="margin-top:5px; font-size:10px; color:#888; border-top:1px dashed #333; padding-top:2px;">
+            Threshold(Z): <span id="val-zmin">2.0</span> | Persistence: <span id="val-pmin">20%</span>
+          </div>
+          <div style="margin-top:5px; padding-top:5px; border-top:1px dashed #0f0;">
+            <div>DPR: <span id="dbg-dpr">1.0</span></div>
+            <div>Res: <span id="dbg-res">0x0</span></div>
+            <div>Res: <span id="dbg-res">0x0</span></div>
+            <div>Mouse: <span id="dbg-mouse">0, 0</span></div>
+            <div style="margin-top:4px; border-top:1px dashed #444; padding-top:2px;">
+              <span id="dbg-counts" style="color:#aaa; font-size:10px;">Counts: -</span>
+            </div>
+          </div>
+          <div style="margin-top:15px; border-top:1px solid #0f0; padding-top:10px;">
+            <div style="font-weight:bold; color:#fff; border-bottom:1px solid #444; margin-bottom:5px;">POINT INSPECTOR
+            </div>
+            <div id="inspector-content" style="min-height:40px; color:#ddd;">
+              <span style="color:#666;">-- SCANNING --</span>
+            </div>
+          </div>
+          <div style="margin-top:15px; border-top:1px solid #39f; padding-top:10px;">
+            <div style="font-weight:bold; color:#39f; border-bottom:1px solid #444; margin-bottom:5px;">SHARC DATABASE
+            </div>
+            <div id="sharc-status" style="min-height:20px; color:#ddd; font-size:10px;">
+              <span style="color:#666;">-- INITIALIZING --</span>
+            </div>
+          </div>
         </div>
-        <!-- Hidden button for legacy logic if needed, or we remap functionality -->
-        <button id="btn-update-max" style="display:none;"></button>
-      </div>
-      <div class="stat-row"><span>Visible Nodes:</span> <span class="stat-val" id="disp-visible">0</span></div>
-      <div class="stat-row"><span>Strategy:</span> <span class="stat-val" id="disp-strategy">AUTO</span></div>
-      <div class="stat-row"><span>FPS:</span> <span class="stat-val" id="disp-fps">60</span></div>
-      <div class="stat-row"><span>Render Time:</span> <span class="stat-val" id="disp-render-time">0ms</span></div>
-
-      <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
-
-      <!-- REMOVED: Legacy Checkboxes -->
-
-      <div style="margin-bottom:10px; border-bottom:1px solid #444; padding-bottom:10px;">
-        <div style="font-size:11px; color:#4db8ff; font-weight:bold; margin-bottom:5px;">POLAR DENSITY (HEATMAP)</div>
-        <div style="display:flex; justify-content:space-between; align-items:center;">
-          <span>Show Heatmap</span>
-          <label class="switch">
-            <input type="checkbox" id="toggle-heatmap">
-            <span class="slider round"></span>
-          </label>
-        </div>
-        <!-- Toggle is handled by Right Toolbar now, but we keep this as "Enable Analysis"? 
-             Actually, user said "Heatmap not doing anything". 
-             Let's keep the slider here.
-        -->
-        <div class="small" style="margin-top:4px;">
-          Threshold (Z > <span id="disp-hm-thresh">3.0</span>)
-          <input id="slider-hm-thresh" type="range" min="1.0" max="10.0" step="0.1" value="3.0">
-        </div>
-      </div>
-
-      <!-- FIBRE DETECTOR (Simplified) -->
-      <div style="margin-bottom:10px; border-bottom:1px solid #444; padding-bottom:10px;">
-        <div style="font-size:11px; color:#ffcc00; font-weight:bold; margin-bottom:5px;">FIBRE LIST</div>
-        <div id="detector-status" style="font-size:10px; color:#888; margin-bottom:5px;">Status: Idle</div>
-        <div id="fibre-list"
-          style="max-height:100px; overflow-y:auto; border:1px solid #333; padding:2px; font-size:10px; background:rgba(0,0,0,0.3);">
-          <div style="text-align:center; color:#555;">Run Discovery to populate</div>
-        </div>
-      </div>
-
-
-      <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
-
-      <label><input type="checkbox" id="toggle-warp" checked> Compress near origin</label>
-
-      <div class="small" style="margin-top:8px;">
-        Warp strength (R0)
-        <input id="warp-r0" type="range" min="10" max="500" value="120">
-        <canvas id="warp-graph" width="220" height="50"
-          style="width:100%; height:50px; background:rgba(0,0,0,0.2); border-radius:4px; margin-top:5px;"></canvas>
-        <div class="stat-row" style="margin-top:6px;">
-          <span>R0:</span> <span class="stat-val" id="disp-r0">120</span>
-        </div>
-      </div>
-
-      <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
-
-      <div style="font-size:11px; color:#888; font-weight:bold; margin-bottom:5px;">STABILITY TEST</div>
-      <label><input type="checkbox" id="toggle-stability"> Test Stability</label>
-      <div style="display:flex; gap:5px; margin-top:5px;">
-        <select id="sel-stability-type"
-          style="background:#222; color:#fff; border:1px solid #444; font-size:10px; padding:2px; flex:1;">
-          <option value="SCALE">Scale (+/- 5%)</option>
-          <option value="WARP">Warp (+/- 5%)</option>
-        </select>
-      </div>
-
-      <hr style="border: 0; border-top: 1px solid #444; margin: 10px 0;">
-
-
-      <div class="small" style="margin-top:10px; line-height:1.35;">
-        <b>Controls:</b> Wheel = Zoom, Drag = Pan, Hover/Tap = Snap tooltip<br>
-        <b>Mobile:</b> Drag = Pan, Pinch = Zoom, Double-tap = Zoom-in<br>
-        <b>Tip:</b> Increase R0 to squeeze inner region harder.
-      </div>
+      </details>
     </div>
   </div>
 
@@ -796,69 +754,6 @@
     <div id="btn-toggle-pow2" class="icon-btn active" data-color="purple" data-tooltip="Powers of 2 (Purple)">
       <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <path d="M13 2L3 14h9l-1 8 10-12h-9l1-8z" />
-      </svg>
-    </div>
-
-    <!-- Separator -->
-    <div style="height:1px; background:rgba(255,255,255,0.1); margin: 4px 8px;"></div>
-
-    <!-- Euler Fiber -->
-    <div id="btn-toggle-fiber-euler" class="icon-btn" data-color="cyan" data-tooltip="Euler Fiber">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M22 6c-4 0-5 5-9 5s-6-5-9-5" />
-        <path d="M4 14c4 0 5 4 9 4s5-4 9-4" />
-      </svg>
-    </div>
-
-    <!-- Legendre Fiber -->
-    <div id="btn-toggle-fiber-legendre" class="icon-btn" data-color="yellow" data-tooltip="Legendre Fiber">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <path d="M22 18c-4 0-5-5-9-5s-6 5-9 5" />
-        <path d="M4 10c4 0 5-4 9-4s5 4 9 4" />
-      </svg>
-    </div>
-
-    <!-- Flux Lines -->
-    <div id="btn-toggle-flux" class="icon-btn" data-color="magenta" data-tooltip="Flux Lines">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <line x1="12" y1="5" x2="12" y2="19" />
-        <line x1="5" y1="12" x2="19" y2="12" />
-        <circle cx="12" cy="12" r="3" />
-      </svg>
-    </div>
-
-    <!-- Separator -->
-    <div style="height:1px; background:rgba(255,255,255,0.1); margin: 4px 8px;"></div>
-
-    <!-- Extracted Fibres (Auto-Show) -->
-    <div id="btn-toggle-extracted" class="icon-btn" data-color="gold" data-tooltip="Extracted Fibres"
-      style="display:none;">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <!-- Star / Sparkle icon -->
-        <path d="M12 2l3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01L12 2z" />
-      </svg>
-    </div>
-
-    <!-- Separator -->
-    <div style="height:1px; background:rgba(255,255,255,0.1); margin: 4px 8px;"></div>
-
-    <!-- Ghost Image Toggle -->
-    <div id="btn-toggle-ghost" class="icon-btn" data-color="cyan" data-tooltip="Show Ghost Image">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <rect x="2" y="3" width="20" height="14" rx="2" ry="2" />
-        <line x1="8" y1="21" x2="16" y2="21" />
-        <line x1="12" y1="17" x2="12" y2="21" />
-      </svg>
-    </div>
-
-    <!-- Separator -->
-    <div style="height:1px; background:rgba(255,255,255,0.1); margin: 4px 8px;"></div>
-
-    <!-- Run Discovery (Icon Button) -->
-    <div id="btn-run-discovery-icon" class="icon-btn" data-color="gold" data-tooltip="Run Fibre Discovery">
-      <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
-        <circle cx="11" cy="11" r="8"></circle>
-        <line x1="21" y1="21" x2="16.65" y2="16.65"></line>
       </svg>
     </div>
 
@@ -923,15 +818,8 @@
   </div>
 
 
-  <script src="wwwroot/fiberManager.js?v=3"></script>
-  <script src="wwwroot/rng.js?v=3"></script>
   <script src="wwwroot/camera.js?v=3"></script>
-  <script src="wwwroot/input.js?v=4"></script>
-  <script src="wwwroot/heatmap.js?v=3"></script>
-  <script src="wwwroot/fibreDetector.js?v=3"></script>
-  <script src="wwwroot/dataCache.js?v=1"></script>
-  <!-- spatialGrid.js removed (Legacy) -->
-  <script src="wwwroot/_framework/blazor.webassembly.js" autostart="false"></script>
+  <script src="_framework/blazor.webassembly.js" autostart="false"></script>
   <script src="wwwroot/wasmBridge.js?v=4"></script>
   <script src="wwwroot/test_bench.js?v=3"></script>
   <script src="wwwroot/spiral.js?v=4"></script>

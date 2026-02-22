@@ -2,6 +2,13 @@ const http = require('http');
 const fs = require('fs');
 const path = require('path');
 
+function log(msg) {
+    console.log(msg);
+    fs.appendFileSync('server.log', `${new Date().toISOString()} ${msg}\n`);
+}
+
+if (fs.existsSync('server.log')) fs.unlinkSync('server.log');
+
 const port = 8081;
 
 const mimeTypes = {
@@ -22,7 +29,7 @@ const mimeTypes = {
 };
 
 http.createServer(function (request, response) {
-    console.log('request ', request.url);
+    log('request ' + request.url);
 
     // Strip query string
     let originalUrl = request.url;
@@ -38,59 +45,89 @@ http.createServer(function (request, response) {
         url = '/index.html';
     }
 
-    // Framework Mapping (Dynamic Resolution for Hashed Files)
-    if (url.includes('/_framework/')) {
-        const parts = url.split('/_framework/');
-        const fileName = parts[1];
-        const searchDir = path.join(__dirname, '_framework');
-
-        if (fs.existsSync(searchDir)) {
-            const files = fs.readdirSync(searchDir);
-            // Match name.hash.ext or name.ext
-            const baseName = fileName.split('.')[0];
-            const ext = path.extname(fileName);
-            const match = files.find(f => f.startsWith(baseName) && f.endsWith(ext));
-
-            if (match) {
-                console.log(`[Framework Probing] Found ${fileName} -> ${match}`);
-                url = '/_framework/' + match;
-            } else {
-                console.warn(`[Framework Probing] No match for ${fileName} in ${searchDir}`);
-            }
-        }
-    }
-
     // Resolve File Path
     // Serve everything from project root so index.html (at root) can resolve ./wwwroot/... paths
     const projectRoot = path.join(__dirname, '..');
     const wwwroot = __dirname;
+    let filePath = '';
+    let frameworkMatched = false;
 
-    let filePath = path.join(projectRoot, url);
+    // Framework Mapping (Dynamic Resolution for Hashed Files)
+    if (url.includes('/_framework/')) {
+        const parts = url.split('/_framework/');
+        const fileName = parts[1];
 
-    // If it's a root request for index.html, it's already in projectRoot
-    // If it's a request for a file that doesn't exist at root, try wwwroot
-    if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
-        let altPath = path.join(wwwroot, url);
-        if (fs.existsSync(altPath) && !fs.statSync(altPath).isDirectory()) {
-            filePath = altPath;
+        // Prioritize the user-requested artefacts folder
+        const searchDirs = [
+            path.join(wwwroot, '_framework'),
+            path.join(projectRoot, 'artefacts', 'publish', 'wwwroot', '_framework'),
+            path.join(projectRoot, 'artefacts', '_framework')
+        ];
+
+        let matchedFile = null;
+        for (const searchDir of searchDirs) {
+            if (fs.existsSync(searchDir)) {
+                // If it's a direct match, use it
+                const directPath = path.join(searchDir, fileName);
+                if (fs.existsSync(directPath) && !fs.statSync(directPath).isDirectory()) {
+                    matchedFile = directPath;
+                    break;
+                }
+
+                // Otherwise, try to find a file with the same prefix (stripping hash)
+                const files = fs.readdirSync(searchDir);
+                const requestedPrefix = fileName.split('.')[0];
+                const ext = path.extname(fileName);
+
+                // Advanced prefix matching for dotnet.native.js etc.
+                let complexPrefix = requestedPrefix;
+                const nameParts = fileName.split('.');
+                if (nameParts.length > 2 && (nameParts[1] === 'native' || nameParts[1] === 'runtime')) {
+                    complexPrefix = nameParts[0] + '.' + nameParts[1];
+                }
+
+                const match = files.find(f => {
+                    if (!f.endsWith(ext)) return false;
+                    return f.startsWith(complexPrefix) || f.startsWith(requestedPrefix);
+                });
+
+                if (match) {
+                    log(`[Framework Probing] Matched ${fileName} -> ${match} in ${searchDir}`);
+                    matchedFile = path.join(searchDir, match);
+                    break;
+                }
+            }
+        }
+
+        if (matchedFile) {
+            filePath = matchedFile;
+            frameworkMatched = true;
+        } else {
+            log(`[Framework Probing] FAILED to match framework file: ${fileName}`);
         }
     }
-    if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
-        // Try inside wwwroot
-        let altPath = path.join(wwwroot, url);
-        if (fs.existsSync(altPath) && !fs.statSync(altPath).isDirectory()) {
-            filePath = altPath;
+
+    if (!frameworkMatched) {
+        filePath = path.join(projectRoot, url);
+
+        // If it's a root request for index.html, it's already in projectRoot
+        // If it's a request for a file that doesn't exist at root, try wwwroot
+        if (!fs.existsSync(filePath) || fs.statSync(filePath).isDirectory()) {
+            let altPath = path.join(wwwroot, url);
+            if (fs.existsSync(altPath) && !fs.statSync(altPath).isDirectory()) {
+                filePath = altPath;
+            }
         }
     }
 
-    console.log(`Mapping: ${originalUrl} -> ${filePath}`);
+    log(`Mapping: ${originalUrl} -> ${filePath}`);
 
     const extname = String(path.extname(filePath)).toLowerCase();
     const contentType = mimeTypes[extname] || 'application/octet-stream';
 
     fs.readFile(filePath, function (error, content) {
         if (error) {
-            console.error(`Read error [${error.code}]: ${filePath}`);
+            log(`Read error [${error.code}]: ${filePath}`);
             if (error.code == 'ENOENT') {
                 response.writeHead(404, { 'Content-Type': 'text/html' });
                 response.end('404 Not Found', 'utf-8');
@@ -102,7 +139,7 @@ http.createServer(function (request, response) {
         }
         else {
             response.writeHead(200, { 'Content-Type': contentType });
-            response.end(content, 'utf-8');
+            response.end(content);
         }
     });
 

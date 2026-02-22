@@ -120,32 +120,79 @@ public static class SharcPrimeStore
     // ═══════════════════════════════════════════════════════════════
 
     /// <summary>
-    /// Initialize Sharc database with prime data up to the given limit.
-    /// Demonstrates: SharcDatabase.Create, SharcWriter, SharcWriteTransaction.Execute (DDL).
+    /// Initialize or extend the Sharc database with prime data up to the given limit.
+    /// Supports progressive loading by allowing multiple calls with increasing limits.
     /// </summary>
     [JSInvokable("InitSharcStore")]
     public static string InitSharcStore(int limit)
     {
-        byte[] primeMap = PrimeEngine.GeneratePrimeMap(limit);
-
-        // Compute coordinates (replicating GridEngine's math)
-        double spacing = 1.0;
-        double warpR0 = 120.0;
-        double[] coordX = new double[limit + 1];
-        double[] coordY = new double[limit + 1];
-
-        for (int i = 0; i <= limit; i++)
+        var sw = Stopwatch.StartNew();
+        
+        // Step 1: Initialize DB if not already present
+        if (_db == null)
         {
-            double root = Math.Sqrt(i);
-            double theta = root * 2.0 * Math.PI;
-            double r = root * spacing;
-            double rw = (r * r) / (r + warpR0);
+            const string tmpPath = "/tmp/primes_sharc.db";
+            if (System.IO.File.Exists(tmpPath)) System.IO.File.Delete(tmpPath);
 
-            coordX[i] = -Math.Cos(theta) * rw;
-            coordY[i] = Math.Sin(theta) * rw;
+            var db = SharcDatabase.Create(tmpPath);
+            using (var writer = SharcWriter.From(db))
+            {
+                using (var ddlTx = writer.BeginTransaction())
+                {
+                    ddlTx.Execute("CREATE TABLE primes (n INTEGER PRIMARY KEY, x REAL NOT NULL, y REAL NOT NULL)");
+                    ddlTx.Commit();
+                }
+            }
+            db.Dispose();
+            
+            byte[] dbBytes = System.IO.File.ReadAllBytes(tmpPath);
+            _db = SharcDatabase.OpenMemory(dbBytes, new SharcOpenOptions { Writable = true });
+            _writer = SharcWriter.From(_db);
+            _maxNumber = 0;
+            _primeCount = 0;
+            _isInitialized = true;
         }
 
-        return InitFromGridData(limit, primeMap, coordX, coordY);
+        if (limit <= _maxNumber) return $"Already loaded up to {_maxNumber}";
+
+        // Step 2: Sieve and Append
+        byte[] primeMap = PrimeEngine.GeneratePrimeMap(limit);
+        int startN = Math.Max(2, _maxNumber + 1);
+        int addedCount = 0;
+        double spacing = 1.0;
+        double warpR0 = 120.0;
+
+        IEnumerable<Sharc.Core.ColumnValue[]> BuildRecords()
+        {
+            for (int i = startN; i <= limit; i++)
+            {
+                if (primeMap[i] != 1) continue;
+                addedCount++;
+
+                double root = Math.Sqrt(i);
+                double theta = root * 2.0 * Math.PI;
+                double r = root * spacing;
+                double rw = (r * r) / (r + warpR0);
+
+                yield return new Sharc.Core.ColumnValue[]
+                {
+                    (long)i,
+                    -Math.Cos(theta) * rw,
+                    Math.Sin(theta) * rw
+                };
+            }
+        }
+
+        _writer!.InsertBatch("primes", BuildRecords());
+        
+        _primeCount += addedCount;
+        _maxNumber = limit;
+        // _dbSizeBytes = _db.MemoryBuffer?.Length ?? 0; // Property not available in this Sharc version
+
+        sw.Stop();
+        _initMs = sw.Elapsed.TotalMilliseconds;
+
+        return $"Sharc OK: {_primeCount} primes total (up to {limit}), {_dbSizeBytes / 1024}KB, {sw.Elapsed.TotalMilliseconds:F1}ms";
     }
 
     /// <summary>
