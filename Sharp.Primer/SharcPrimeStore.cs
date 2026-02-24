@@ -1,6 +1,5 @@
 using Microsoft.JSInterop;
 using Sharc;
-using Sharc.Core.Query;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -11,13 +10,16 @@ namespace Sharp.Primer;
 /// <summary>
 /// Sharc-backed data layer for PrimeSpiral.
 /// Demonstrates SharcDatabase creation, SharcWriter bulk inserts,
-/// SharcDataReader B-tree seeks, SharcFilter range queries,
-/// and SharcSchema introspection — all running in Blazor WASM.
+/// PreparedReader zero-alloc B-tree seeks, JitQuery with FilterStar
+/// for spatial queries, and SharcSchema introspection — all running in Blazor WASM.
 /// </summary>
 public static class SharcPrimeStore
 {
     private static SharcDatabase? _db;
     private static SharcWriter? _writer;
+    private static PreparedReader? _seekReader;   // SharcIsPrime + SharcBenchmarkSeek
+    private static PreparedReader? _scanReader;   // SharcGetPrimesInRange + SharcGetStats
+    private static JitQuery? _spatialJit;          // SharcGetNearestPrime
     private static int _primeCount;
     private static int _maxNumber;
     private static long _dbSizeBytes;
@@ -38,8 +40,14 @@ public static class SharcPrimeStore
         try
         {
             // Clean up previous instance
+            _spatialJit?.Dispose();
+            _scanReader?.Dispose();
+            _seekReader?.Dispose();
             _writer?.Dispose();
             _db?.Dispose();
+            _spatialJit = null;
+            _scanReader = null;
+            _seekReader = null;
             _writer = null;
             _db = null;
 
@@ -82,6 +90,9 @@ public static class SharcPrimeStore
             // Open for reads (and future writes) from memory
             _db = SharcDatabase.OpenMemory(dbBytes, new SharcOpenOptions { Writable = true });
             _writer = SharcWriter.From(_db);
+            _seekReader = _db.PrepareReader("primes", "n");
+            _scanReader = _db.PrepareReader("primes");
+            _spatialJit = _db.Jit("primes");
             _primeCount = primeCount;
             _maxNumber = limit;
             _isInitialized = true;
@@ -148,6 +159,9 @@ public static class SharcPrimeStore
             byte[] dbBytes = System.IO.File.ReadAllBytes(tmpPath);
             _db = SharcDatabase.OpenMemory(dbBytes, new SharcOpenOptions { Writable = true });
             _writer = SharcWriter.From(_db);
+            _seekReader = _db.PrepareReader("primes", "n");
+            _scanReader = _db.PrepareReader("primes");
+            _spatialJit = _db.Jit("primes");
             _maxNumber = 0;
             _primeCount = 0;
             _isInitialized = true;
@@ -202,9 +216,9 @@ public static class SharcPrimeStore
     [JSInvokable("SharcIsPrime")]
     public static bool SharcIsPrime(int n)
     {
-        if (_db == null || !_isInitialized) return false;
+        if (_seekReader == null || !_isInitialized) return false;
 
-        using var reader = _db.CreateReader("primes", "n");
+        using var reader = _seekReader.CreateReader();
         return reader.Seek(n);
     }
 
@@ -215,11 +229,10 @@ public static class SharcPrimeStore
     [JSInvokable("SharcGetPrimesInRange")]
     public static int[] SharcGetPrimesInRange(int minN, int maxN)
     {
-        if (_db == null || !_isInitialized) return Array.Empty<int>();
+        if (_scanReader == null || !_isInitialized) return Array.Empty<int>();
 
-        // Seek to first candidate, then forward-scan B-tree in rowid order.
-        // This leverages the B-tree's natural ordering by INTEGER PRIMARY KEY.
-        using var reader = _db.CreateReader("primes");
+        // Zero-alloc prepared reader — reuses cached cursor + reader state.
+        using var reader = _scanReader.CreateReader();
         var results = new List<int>();
 
         // Seek positions the cursor at (or near) the target rowid
@@ -243,17 +256,17 @@ public static class SharcPrimeStore
     [JSInvokable("SharcGetNearestPrime")]
     public static int SharcGetNearestPrime(double x, double y, double maxDist)
     {
-        if (_db == null || !_isInitialized) return -1;
+        if (_spatialJit == null || !_isInitialized) return -1;
 
-        var filters = new SharcFilter[]
-        {
-            new("x", SharcOperator.GreaterOrEqual, x - maxDist),
-            new("x", SharcOperator.LessOrEqual, x + maxDist),
-            new("y", SharcOperator.GreaterOrEqual, y - maxDist),
-            new("y", SharcOperator.LessOrEqual, y + maxDist)
-        };
+        // JitQuery: ClearFilters resets accumulated state, Where chains AND predicates.
+        // Reuses compiled filter nodes — no SharcFilter[] allocation per call.
+        _spatialJit.ClearFilters()
+            .Where(FilterStar.Column("x").Gte(x - maxDist))
+            .Where(FilterStar.Column("x").Lte(x + maxDist))
+            .Where(FilterStar.Column("y").Gte(y - maxDist))
+            .Where(FilterStar.Column("y").Lte(y + maxDist));
 
-        using var reader = _db.CreateReader("primes", new[] { "n", "x", "y" }, filters);
+        using var reader = _spatialJit.Query("n", "x", "y");
 
         int nearestId = -1;
         double minDistSq = maxDist * maxDist;
@@ -322,10 +335,10 @@ public static class SharcPrimeStore
     {
         if (_db == null || !_isInitialized) return null;
 
-        // Count rows via scan (demonstrating reader pattern)
+        // Count rows via prepared scan (zero-alloc after first call)
         var sw = Stopwatch.StartNew();
         int count = 0;
-        using (var reader = _db.CreateReader("primes", "n"))
+        using (var reader = _seekReader!.CreateReader())
         {
             while (reader.Read()) count++;
         }
@@ -339,7 +352,7 @@ public static class SharcPrimeStore
             initMs = Math.Round(_initMs, 1),
             scanMs = Math.Round(sw.Elapsed.TotalMilliseconds, 2),
             tableCount = _db.Schema.Tables.Count,
-            version = "Sharc 1.0.1-alpha"
+            version = "Sharc 1.1.2-beta"
         };
     }
 
@@ -350,23 +363,23 @@ public static class SharcPrimeStore
     [JSInvokable("SharcBenchmarkSeek")]
     public static string SharcBenchmarkSeek(int iterations)
     {
-        if (_db == null || !_isInitialized)
+        if (_seekReader == null || !_isInitialized)
             return "Error: Sharc not initialized";
 
         var rand = new Random(42);
         int maxN = _maxNumber;
 
-        // Warm up
-        using (var warmup = _db.CreateReader("primes", "n"))
+        // Warm up — PreparedReader reuses cached cursor, zero alloc
+        using (var warmup = _seekReader.CreateReader())
         {
             for (int i = 0; i < 50; i++)
                 warmup.Seek(rand.Next(2, maxN));
         }
 
-        // Measure
+        // Measure — same prepared handle, no schema re-resolution
         var sw = Stopwatch.StartNew();
         int hits = 0;
-        using (var reader = _db.CreateReader("primes", "n"))
+        using (var reader = _seekReader.CreateReader())
         {
             for (int i = 0; i < iterations; i++)
             {
@@ -377,7 +390,7 @@ public static class SharcPrimeStore
         sw.Stop();
 
         double avgNs = sw.Elapsed.TotalMilliseconds * 1_000_000.0 / iterations;
-        return $"[Sharc Seek] {iterations} lookups: {sw.Elapsed.TotalMilliseconds:F2}ms " +
+        return $"[Sharc PreparedReader Seek] {iterations} lookups: {sw.Elapsed.TotalMilliseconds:F2}ms " +
                $"(avg {avgNs:F0}ns/op), hits: {hits}/{iterations}";
     }
 }
