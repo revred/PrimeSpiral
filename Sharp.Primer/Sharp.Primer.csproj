@@ -15,9 +15,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Sharc" Version="1.1.6-rc1" />
-    <PackageReference Include="Sharc.Graph" Version="1.1.6-rc1" />
-    <PackageReference Include="Sharc.Vector" Version="1.1.6-rc1" />
+    <PackageReference Include="Sharc" Version="1.2.59" />
+    <PackageReference Include="Sharc.Graph" Version="1.2.59" />
+    <PackageReference Include="Sharc.Vector" Version="1.2.59" />
   </ItemGroup>
 
   <!-- Preserve Sharc assemblies from IL trimmer (accessed via JSInterop reflection) -->

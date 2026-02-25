@@ -133,6 +133,11 @@ window.wasmEngine = {
         return await DotNet.invokeMethodAsync('Sharp.Primer', 'SharcGetNearestPrime', x, y, maxDist);
     },
 
+    sharcGetKNeighborsTopK: async function (x, y, k, maxDist) {
+        if (!this.sharcReady) return [];
+        return await DotNet.invokeMethodAsync('Sharp.Primer', 'SharcGetKNeighborsTopK', x, y, k, maxDist);
+    },
+
     sharcGetSchema: async function () {
         if (!this.sharcReady) return null;
         return await DotNet.invokeMethodAsync('Sharp.Primer', 'SharcGetSchema');
@@ -146,6 +151,11 @@ window.wasmEngine = {
     sharcBenchmarkSeek: async function (iterations) {
         if (!this.sharcReady) return "Sharc not ready";
         return await DotNet.invokeMethodAsync('Sharp.Primer', 'SharcBenchmarkSeek', iterations || 10000);
+    },
+
+    sharcBenchmarkTopK: async function (iterations, k, maxDist) {
+        if (!this.sharcReady) return "Sharc not ready";
+        return await DotNet.invokeMethodAsync('Sharp.Primer', 'SharcBenchmarkTopK', iterations || 1000, k || 10, maxDist || 100.0);
     },
 
     _updateSharcHud: function (statusText, type = 'ok') {

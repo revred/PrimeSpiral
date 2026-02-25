@@ -21,7 +21,7 @@ public static class SharcPrimeStore
     private static SharcWriter? _writer;
     private static PreparedReader? _seekReader;   // SharcIsPrime + SharcBenchmarkSeek
     private static PreparedReader? _scanReader;   // SharcGetPrimesInRange + SharcGetStats
-    private static JitQuery? _spatialJit;          // SharcGetNearestPrime (legacy fallback)
+    private static JitQuery? _spatialJit;          // TopK nearest-neighbour ranking path
     private static VectorQuery? _vectorQuery;      // HNSW-accelerated KNN search
     private static HnswIndex? _hnswIndex;          // HNSW index over 2D embeddings
     private static int _primeCount;
@@ -305,24 +305,72 @@ public static class SharcPrimeStore
     }
 
     /// <summary>
+    /// KNN search using JitQuery.TopK streaming scorer (exact in filtered window).
+    /// </summary>
+    [JSInvokable("SharcGetKNeighborsTopK")]
+    public static int[] SharcGetKNeighborsTopK(double x, double y, int k, double maxDist)
+    {
+        return GetTopKNeighborsByDistance(x, y, k, maxDist);
+    }
+
+    /// <summary>
     /// Nearest-prime query: Find the single closest prime to (x, y).
     /// Uses HNSW vector search — one call, no bounding box needed.
     /// </summary>
     [JSInvokable("SharcGetNearestPrime")]
     public static int SharcGetNearestPrime(double x, double y, double maxDist)
     {
-        if (_vectorQuery == null || !_isInitialized) return -1;
+        if (!_isInitialized) return -1;
 
-        // HNSW-accelerated nearest-neighbor lookup (k=1)
-        var queryPoint = new float[] { (float)x, (float)y };
-        var result = _vectorQuery.NearestTo(queryPoint, k: 1, columnNames: "n");
+        // Fast path: HNSW ANN.
+        if (_vectorQuery != null)
+        {
+            var queryPoint = new float[] { (float)x, (float)y };
+            var result = _vectorQuery.NearestTo(queryPoint, k: 1, columnNames: "n");
+            if (result.Count > 0 && result[0].Distance <= (float)maxDist)
+                return (int)Convert.ToInt64(result[0].Metadata!["n"]);
+        }
 
-        if (result.Count == 0) return -1;
+        // Exact fallback: JitQuery.TopK over a bounded window.
+        var exact = GetTopKNeighborsByDistance(x, y, k: 1, maxDist);
+        return exact.Length == 0 ? -1 : exact[0];
+    }
 
-        // Check distance threshold (result.Distance is Euclidean distance)
-        if (result[0].Distance > (float)maxDist) return -1;
+    private static int[] GetTopKNeighborsByDistance(double x, double y, int k, double maxDist)
+    {
+        if (_spatialJit == null || !_isInitialized || k <= 0 || maxDist <= 0)
+            return Array.Empty<int>();
 
-        return (int)Convert.ToInt64(result[0].Metadata!["n"]);
+        double minX = x - maxDist;
+        double maxX = x + maxDist;
+        double minY = y - maxDist;
+        double maxY = y + maxDist;
+        double maxDistSq = maxDist * maxDist;
+
+        _spatialJit.ClearFilters()
+            .Where(FilterStar.Column("x").Between(minX, maxX))
+            .Where(FilterStar.Column("y").Between(minY, maxY));
+
+        using var reader = _spatialJit.TopK(
+            k,
+            row =>
+            {
+                double dx = row.GetDouble(1) - x;
+                double dy = row.GetDouble(2) - y;
+                return Math.Sqrt(dx * dx + dy * dy);
+            },
+            "n", "x", "y");
+
+        var ids = new List<int>(k);
+        while (reader.Read())
+        {
+            double dx = reader.GetDouble(1) - x;
+            double dy = reader.GetDouble(2) - y;
+            if ((dx * dx + dy * dy) <= maxDistSq)
+                ids.Add((int)reader.GetInt64(0));
+        }
+
+        return ids.ToArray();
     }
 
     /// <summary>
@@ -388,7 +436,7 @@ public static class SharcPrimeStore
             initMs = Math.Round(_initMs, 1),
             scanMs = Math.Round(sw.Elapsed.TotalMilliseconds, 2),
             tableCount = _db.Schema.Tables.Count,
-            version = "Sharc 1.1.6-rc1 (Vector)"
+            version = "Sharc 1.2.59 (Vector + TopK)"
         };
     }
 
@@ -461,6 +509,39 @@ public static class SharcPrimeStore
 
         double avgMs = sw.Elapsed.TotalMilliseconds / iterations;
         return $"[Sharc HNSW KNN (k={k})] {iterations} searches: {sw.Elapsed.TotalMilliseconds:F2}ms " +
+               $"(avg {avgMs:F2}ms/op)";
+    }
+
+    /// <summary>
+    /// Timed TopK benchmark: Measure JitQuery.TopK distance ranking in bounded windows.
+    /// </summary>
+    [JSInvokable("SharcBenchmarkTopK")]
+    public static string SharcBenchmarkTopK(int iterations, int k, double maxDist = 100.0)
+    {
+        if (_spatialJit == null || !_isInitialized)
+            return "Error: Sharc not initialized";
+
+        var rand = new Random(42);
+        double range = Math.Sqrt(_maxNumber);
+
+        for (int i = 0; i < 5; i++)
+        {
+            double rx = (rand.NextDouble() * 2 - 1) * range;
+            double ry = (rand.NextDouble() * 2 - 1) * range;
+            GetTopKNeighborsByDistance(rx, ry, k, maxDist);
+        }
+
+        var sw = Stopwatch.StartNew();
+        for (int i = 0; i < iterations; i++)
+        {
+            double rx = (rand.NextDouble() * 2 - 1) * range;
+            double ry = (rand.NextDouble() * 2 - 1) * range;
+            GetTopKNeighborsByDistance(rx, ry, k, maxDist);
+        }
+        sw.Stop();
+
+        double avgMs = sw.Elapsed.TotalMilliseconds / iterations;
+        return $"[Sharc TopK (k={k}, r={maxDist:F1})] {iterations} searches: {sw.Elapsed.TotalMilliseconds:F2}ms " +
                $"(avg {avgMs:F2}ms/op)";
     }
 }
