@@ -24,6 +24,11 @@ const SPACING = 1;
 const SAFETY_LIMIT = 50000;
 let hoveredPrime = null;
 let hoveredNeighbors = [];
+const HOVER_TOPK_K = 8;
+const HOVER_TOPK_RADIUS_MULTIPLIER = 2.5;
+let pendingTopKHoverQuery = null;
+let isTopKHoverQueryRunning = false;
+let topKHoverQueryVersion = 0;
 
 // --- COMPONENTS ---
 const camera = new Camera(window.innerWidth / 2, window.innerHeight / 2);
@@ -439,7 +444,7 @@ function resize() {
   requestAnimationFrame(draw);
 }
 
-function getNearestPrime(worldX, worldY, maxRadius) {
+function getNearestPrimeLocal(worldX, worldY, maxRadius) {
   let bestDistSq = maxRadius * maxRadius;
   let bestId = null;
 
@@ -466,20 +471,90 @@ function getNearestPrime(worldX, worldY, maxRadius) {
   return bestId;
 }
 
+function isRenderablePrimeId(id) {
+  return Number.isInteger(id) &&
+    id >= minNumber &&
+    id <= maxNumber &&
+    id < primeMap.length &&
+    primeMap[id] === 1;
+}
+
+function buildNeighborPointsFromIds(ids, centerId) {
+  const neighbors = [];
+  for (const id of ids) {
+    if (id === centerId || !isRenderablePrimeId(id)) continue;
+    neighbors.push({ id, x: cacheX[id], y: cacheY[id] });
+    if (neighbors.length >= HOVER_TOPK_K - 1) break;
+  }
+  return neighbors;
+}
+
+function scheduleTopKHoverQuery(wx, wy, searchRad) {
+  if (!window.wasmEngine || !window.wasmEngine.sharcReady) return;
+  if (!Number.isFinite(wx) || !Number.isFinite(wy) || !Number.isFinite(searchRad) || searchRad <= 0) return;
+
+  pendingTopKHoverQuery = {
+    wx,
+    wy,
+    maxDist: searchRad * HOVER_TOPK_RADIUS_MULTIPLIER,
+    version: ++topKHoverQueryVersion
+  };
+
+  if (!isTopKHoverQueryRunning) {
+    void runTopKHoverQueryQueue();
+  }
+}
+
+async function runTopKHoverQueryQueue() {
+  isTopKHoverQueryRunning = true;
+  try {
+    while (pendingTopKHoverQuery) {
+      const query = pendingTopKHoverQuery;
+      pendingTopKHoverQuery = null;
+
+      try {
+        const ids = await window.wasmEngine.sharcGetKNeighborsTopK(query.wx, query.wy, HOVER_TOPK_K, query.maxDist);
+        if (query.version !== topKHoverQueryVersion) continue; // stale result
+        if (!Array.isArray(ids) || ids.length === 0) continue;
+
+        let nearestId = null;
+        for (const id of ids) {
+          if (isRenderablePrimeId(id)) {
+            nearestId = id;
+            break;
+          }
+        }
+        if (nearestId === null) continue;
+
+        hoveredPrime = nearestId;
+        hoveredNeighbors = buildNeighborPointsFromIds(ids, nearestId);
+        requestAnimationFrame(draw);
+      } catch {
+        // Keep local hover path active if TopK query transiently fails.
+      }
+    }
+  } finally {
+    isTopKHoverQueryRunning = false;
+  }
+}
+
 const inputHandler = new InputHandler(canvasOverlay, camera, () => {
   const wx = window.mouseWorldX || (inputHandler ? inputHandler.worldX : 0);
   const wy = window.mouseWorldY || (inputHandler ? inputHandler.worldY : 0);
 
-  const searchRad = 20 / camera.renderScale; // 20 pixels max hover distance
-  const nearestId = getNearestPrime(wx, wy, searchRad);
+  const searchRad = 20 / Math.max(camera.renderScale, 0.0001); // 20 pixels max hover distance
+  const nearestId = getNearestPrimeLocal(wx, wy, searchRad);
+  scheduleTopKHoverQuery(wx, wy, searchRad);
 
   if (nearestId !== null) {
+    const changed = hoveredPrime !== nearestId;
     hoveredPrime = nearestId;
-    hoveredNeighbors = [];
+    if (changed) hoveredNeighbors = [];
     requestAnimationFrame(draw);
   } else {
     if (hoveredPrime !== null) {
       hoveredPrime = null;
+      hoveredNeighbors = [];
       requestAnimationFrame(draw);
     }
   }
