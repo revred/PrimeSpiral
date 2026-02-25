@@ -22,9 +22,12 @@ const SPACING = 1;
 
 // --- GLOBAL SETTINGS ---
 const SAFETY_LIMIT = 50000;
+const K_NEIGHBORS = 5;
 let hoveredPrime = null;
 let hoveredNeighbors = [];
-const HOVER_TOPK_K = 8;
+let isShiftPressed = false;
+let isCtrlPressed = false;
+const HOVER_TOPK_K = K_NEIGHBORS + 1;
 const HOVER_TOPK_RADIUS_MULTIPLIER = 2.5;
 let pendingTopKHoverQuery = null;
 let isTopKHoverQueryRunning = false;
@@ -398,7 +401,9 @@ function renderPearl(id) {
   ctxOverlay.lineWidth = 2;
   ctxOverlay.stroke();
 
-  // Connections
+  const showNeighborLabels = isShiftPressed || isCtrlPressed;
+
+  // Connections + neighbor annotations
   if (hoveredNeighbors && hoveredNeighbors.length > 0) {
     ctxOverlay.beginPath();
     ctxOverlay.strokeStyle = "rgba(255, 255, 255, 0.3)";
@@ -411,10 +416,32 @@ function renderPearl(id) {
     });
     ctxOverlay.stroke();
     ctxOverlay.setLineDash([]);
+
+    for (const n of hoveredNeighbors) {
+      const nx = n.x * scale + offX;
+      const ny = n.y * scale + offY;
+
+      ctxOverlay.strokeStyle = "rgba(255, 255, 255, 0.65)";
+      ctxOverlay.lineWidth = 1.2;
+      ctxOverlay.strokeRect(nx - 4, ny - 4, 8, 8);
+
+      if (showNeighborLabels && Number.isInteger(n.id)) {
+        ctxOverlay.fillStyle = "rgba(255, 255, 255, 0.95)";
+        ctxOverlay.font = "11px monospace";
+        ctxOverlay.fillText(String(n.id), nx + 7, ny - 7);
+      }
+    }
+  }
+
+  if (showNeighborLabels) {
+    ctxOverlay.fillStyle = "#FFFFFF";
+    ctxOverlay.font = "12px monospace";
+    ctxOverlay.fillText(String(id), x + 9, y + 14);
   }
 }
 
 function showTooltip(id) {
+  if (!elTooltip || !elTooltipN || !elTooltipSeq) return;
   elTooltip.style.display = 'block';
   elTooltipN.innerText = id.toLocaleString();
   elTooltipSeq.innerText = `Prime #${Math.floor(id / Math.log(id)).toLocaleString()}`; // Est.
@@ -479,6 +506,50 @@ function isRenderablePrimeId(id) {
     primeMap[id] === 1;
 }
 
+function getNeighborsLocal(centerId, count) {
+  if (!isRenderablePrimeId(centerId) || count <= 0) return [];
+
+  const cx = cacheX[centerId];
+  const cy = cacheY[centerId];
+  let searchDist = 80;
+  let candidates = [];
+
+  for (let pass = 0; pass < 4; pass++) {
+    const maxDistSq = searchDist * searchDist;
+    const minKX = Math.floor((cx - searchDist) / grid.cellSize);
+    const maxKX = Math.floor((cx + searchDist) / grid.cellSize);
+    const minKY = Math.floor((cy - searchDist) / grid.cellSize);
+    const maxKY = Math.floor((cy + searchDist) / grid.cellSize);
+    const passCandidates = [];
+
+    for (let ky = minKY; ky <= maxKY; ky++) {
+      for (let kx = minKX; kx <= maxKX; kx++) {
+        const chunk = grid.primeChunks.get(`${kx},${ky}`);
+        if (!chunk) continue;
+
+        for (const id of chunk) {
+          if (id === centerId) continue;
+          const x = cacheX[id];
+          const y = cacheY[id];
+          const dx = x - cx;
+          const dy = y - cy;
+          const distSq = dx * dx + dy * dy;
+          if (distSq <= maxDistSq) {
+            passCandidates.push({ id, x, y, distSq });
+          }
+        }
+      }
+    }
+
+    candidates = passCandidates;
+    if (candidates.length >= count) break;
+    searchDist *= 1.8;
+  }
+
+  candidates.sort((a, b) => a.distSq - b.distSq);
+  return candidates.slice(0, count).map(n => ({ id: n.id, x: n.x, y: n.y }));
+}
+
 function buildNeighborPointsFromIds(ids, centerId) {
   const neighbors = [];
   for (const id of ids) {
@@ -538,6 +609,39 @@ async function runTopKHoverQueryQueue() {
   }
 }
 
+window.addEventListener('keydown', (e) => {
+  let changed = false;
+  if (e.key === 'Shift' && !isShiftPressed) {
+    isShiftPressed = true;
+    changed = true;
+  }
+  if ((e.key === 'Control' || e.key === 'Ctrl') && !isCtrlPressed) {
+    isCtrlPressed = true;
+    changed = true;
+  }
+  if (changed && hoveredPrime !== null) requestAnimationFrame(draw);
+});
+
+window.addEventListener('keyup', (e) => {
+  let changed = false;
+  if (e.key === 'Shift' && isShiftPressed) {
+    isShiftPressed = false;
+    changed = true;
+  }
+  if ((e.key === 'Control' || e.key === 'Ctrl') && isCtrlPressed) {
+    isCtrlPressed = false;
+    changed = true;
+  }
+  if (changed && hoveredPrime !== null) requestAnimationFrame(draw);
+});
+
+window.addEventListener('blur', () => {
+  if (!isShiftPressed && !isCtrlPressed) return;
+  isShiftPressed = false;
+  isCtrlPressed = false;
+  if (hoveredPrime !== null) requestAnimationFrame(draw);
+});
+
 const inputHandler = new InputHandler(canvasOverlay, camera, () => {
   const wx = window.mouseWorldX || (inputHandler ? inputHandler.worldX : 0);
   const wy = window.mouseWorldY || (inputHandler ? inputHandler.worldY : 0);
@@ -549,7 +653,9 @@ const inputHandler = new InputHandler(canvasOverlay, camera, () => {
   if (nearestId !== null) {
     const changed = hoveredPrime !== nearestId;
     hoveredPrime = nearestId;
-    if (changed) hoveredNeighbors = [];
+    if (changed || hoveredNeighbors.length === 0) {
+      hoveredNeighbors = getNeighborsLocal(nearestId, K_NEIGHBORS);
+    }
     requestAnimationFrame(draw);
   } else {
     if (hoveredPrime !== null) {
