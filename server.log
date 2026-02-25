@@ -1,20 +1,2 @@
-2026-02-22T14:08:55.454Z request /
-2026-02-22T14:08:55.461Z Mapping: / -> C:\Code\PrimeSpiral\index.html
-2026-02-22T14:08:55.527Z request /wwwroot/camera.js?v=3
-2026-02-22T14:08:55.529Z Mapping: /wwwroot/camera.js?v=3 -> C:\Code\PrimeSpiral\wwwroot\camera.js
-2026-02-22T14:08:55.530Z request /_framework/blazor.webassembly.js
-2026-02-22T14:08:55.531Z Mapping: /_framework/blazor.webassembly.js -> C:\Code\PrimeSpiral\wwwroot\_framework\blazor.webassembly.js
-2026-02-22T14:08:55.532Z request /wwwroot/wasmBridge.js?v=4
-2026-02-22T14:08:55.532Z Mapping: /wwwroot/wasmBridge.js?v=4 -> C:\Code\PrimeSpiral\wwwroot\wasmBridge.js
-2026-02-22T14:08:55.533Z request /wwwroot/test_bench.js?v=3
-2026-02-22T14:08:55.533Z Mapping: /wwwroot/test_bench.js?v=3 -> C:\Code\PrimeSpiral\wwwroot\test_bench.js
-2026-02-22T14:08:55.540Z request /wwwroot/spiral.js?v=4
-2026-02-22T14:08:55.541Z Mapping: /wwwroot/spiral.js?v=4 -> C:\Code\PrimeSpiral\wwwroot\spiral.js
-2026-02-22T14:08:55.783Z request /_framework/dotnet.js
-2026-02-22T14:08:55.785Z Mapping: /_framework/dotnet.js -> C:\Code\PrimeSpiral\wwwroot\_framework\dotnet.js
-2026-02-22T14:08:55.803Z request /_content/Microsoft.DotNet.HotReload.WebAssembly.Browser/Microsoft.DotNet.HotReload.WebAssembly.Browser.99zm1jdh75.lib.module.js
-2026-02-22T14:08:55.806Z Mapping: /_content/Microsoft.DotNet.HotReload.WebAssembly.Browser/Microsoft.DotNet.HotReload.WebAssembly.Browser.99zm1jdh75.lib.module.js -> C:\Code\PrimeSpiral\wwwroot\_content\Microsoft.DotNet.HotReload.WebAssembly.Browser\Microsoft.DotNet.HotReload.WebAssembly.Browser.99zm1jdh75.lib.module.js
-2026-02-22T14:08:55.814Z request /_framework/dotnet.runtime.2tx45g8lli.js
-2026-02-22T14:08:55.816Z Mapping: /_framework/dotnet.runtime.2tx45g8lli.js -> C:\Code\PrimeSpiral\wwwroot\_framework\dotnet.runtime.2tx45g8lli.js
-2026-02-22T14:08:55.817Z request /_framework/dotnet.native.87vtjjdetb.js
-2026-02-22T14:08:55.818Z Mapping: /_framework/dotnet.native.87vtjjdetb.js -> C:\Code\PrimeSpiral\wwwroot\_framework\dotnet.native.87vtjjdetb.js
+2026-02-25T20:54:42.738Z request /
+2026-02-25T20:54:42.740Z Mapping: / -> C:\Code\PrimeSpiral\index.html

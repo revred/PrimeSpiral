@@ -1,5 +1,7 @@
 using Microsoft.JSInterop;
 using Sharc;
+using Sharc.Vector;
+using Sharc.Vector.Hnsw;
 using System;
 using System.Collections.Generic;
 using System.Diagnostics;
@@ -10,8 +12,8 @@ namespace Sharp.Primer;
 /// <summary>
 /// Sharc-backed data layer for PrimeSpiral.
 /// Demonstrates SharcDatabase creation, SharcWriter bulk inserts,
-/// PreparedReader zero-alloc B-tree seeks, JitQuery with FilterStar
-/// for spatial queries, and SharcSchema introspection — all running in Blazor WASM.
+/// PreparedReader zero-alloc B-tree seeks, HNSW vector search
+/// for KNN neighbourhood queries, and SharcSchema introspection — all running in Blazor WASM.
 /// </summary>
 public static class SharcPrimeStore
 {
@@ -19,7 +21,9 @@ public static class SharcPrimeStore
     private static SharcWriter? _writer;
     private static PreparedReader? _seekReader;   // SharcIsPrime + SharcBenchmarkSeek
     private static PreparedReader? _scanReader;   // SharcGetPrimesInRange + SharcGetStats
-    private static JitQuery? _spatialJit;          // SharcGetNearestPrime
+    private static JitQuery? _spatialJit;          // SharcGetNearestPrime (legacy fallback)
+    private static VectorQuery? _vectorQuery;      // HNSW-accelerated KNN search
+    private static HnswIndex? _hnswIndex;          // HNSW index over 2D embeddings
     private static int _primeCount;
     private static int _maxNumber;
     private static long _dbSizeBytes;
@@ -40,11 +44,15 @@ public static class SharcPrimeStore
         try
         {
             // Clean up previous instance
+            _hnswIndex?.Dispose();
+            _vectorQuery?.Dispose();
             _spatialJit?.Dispose();
             _scanReader?.Dispose();
             _seekReader?.Dispose();
             _writer?.Dispose();
             _db?.Dispose();
+            _hnswIndex = null;
+            _vectorQuery = null;
             _spatialJit = null;
             _scanReader = null;
             _seekReader = null;
@@ -65,7 +73,7 @@ public static class SharcPrimeStore
             using (var ddlTx = writer.BeginTransaction())
             {
                 ddlTx.Execute(
-                    "CREATE TABLE primes (n INTEGER PRIMARY KEY, x REAL NOT NULL, y REAL NOT NULL)");
+                    "CREATE TABLE primes (n INTEGER PRIMARY KEY, x REAL NOT NULL, y REAL NOT NULL, embedding BLOB NOT NULL)");
                 ddlTx.Commit();
             }
 
@@ -93,6 +101,13 @@ public static class SharcPrimeStore
             _seekReader = _db.PrepareReader("primes", "n");
             _scanReader = _db.PrepareReader("primes");
             _spatialJit = _db.Jit("primes");
+
+            // Build HNSW index for sub-millisecond KNN neighbourhood search
+            _hnswIndex = _db.BuildHnswIndex("primes", "embedding",
+                DistanceMetric.Euclidean, persist: false);
+            _vectorQuery = _db.Vector("primes", "embedding", DistanceMetric.Euclidean);
+            _vectorQuery.UseIndex(_hnswIndex);
+
             _primeCount = primeCount;
             _maxNumber = limit;
             _isInitialized = true;
@@ -117,11 +132,17 @@ public static class SharcPrimeStore
         {
             if (primeMap[n] != 1) continue;
 
+            // Encode (x, y) as a 2D float vector for HNSW indexing
+            byte[] embedding = BlobVectorCodec.Encode(
+                new float[] { (float)coordX[n], (float)coordY[n] });
+            int serialType = 12 + embedding.Length * 2; // SQLite BLOB serial type
+
             yield return new Sharc.Core.ColumnValue[]
             {
                 (long)n,
                 coordX[n],
-                coordY[n]
+                coordY[n],
+                Sharc.Core.ColumnValue.Blob(serialType, embedding)
             };
         }
     }
@@ -150,7 +171,7 @@ public static class SharcPrimeStore
             {
                 using (var ddlTx = writer.BeginTransaction())
                 {
-                    ddlTx.Execute("CREATE TABLE primes (n INTEGER PRIMARY KEY, x REAL NOT NULL, y REAL NOT NULL)");
+                    ddlTx.Execute("CREATE TABLE primes (n INTEGER PRIMARY KEY, x REAL NOT NULL, y REAL NOT NULL, embedding BLOB NOT NULL)");
                     ddlTx.Commit();
                 }
             }
@@ -188,20 +209,34 @@ public static class SharcPrimeStore
                 double r = root * spacing;
                 double rw = (r * r) / (r + warpR0);
 
+                double px = -Math.Cos(theta) * rw;
+                double py = Math.Sin(theta) * rw;
+                byte[] embedding = BlobVectorCodec.Encode(
+                    new float[] { (float)px, (float)py });
+                int serialType = 12 + embedding.Length * 2;
+
                 yield return new Sharc.Core.ColumnValue[]
                 {
                     (long)i,
-                    -Math.Cos(theta) * rw,
-                    Math.Sin(theta) * rw
+                    px,
+                    py,
+                    Sharc.Core.ColumnValue.Blob(serialType, embedding)
                 };
             }
         }
 
         _writer!.InsertBatch("primes", BuildRecords());
-        
+
+        // Rebuild HNSW index after new data is inserted
+        _hnswIndex?.Dispose();
+        _vectorQuery?.Dispose();
+        _hnswIndex = _db!.BuildHnswIndex("primes", "embedding",
+            DistanceMetric.Euclidean, persist: false);
+        _vectorQuery = _db.Vector("primes", "embedding", DistanceMetric.Euclidean);
+        _vectorQuery.UseIndex(_hnswIndex);
+
         _primeCount += addedCount;
         _maxNumber = limit;
-        // _dbSizeBytes = _db.MemoryBuffer?.Length ?? 0; // Property not available in this Sharc version
 
         sw.Stop();
         _initMs = sw.Elapsed.TotalMilliseconds;
@@ -250,43 +285,44 @@ public static class SharcPrimeStore
     }
 
     /// <summary>
-    /// Spatial bounding-box query: Find nearest prime to (x, y).
-    /// Demonstrates: SharcFilter with multiple columns (x, y bounding box).
+    /// K-Nearest Neighbors (KNN) search using HNSW vector index.
+    /// Finds the K closest primes to a target (x, y).
+    /// Uses Sharc.Vector HNSW acceleration — sub-millisecond, no bounding box needed.
+    /// </summary>
+    [JSInvokable("SharcGetKNeighbors")]
+    public static int[] SharcGetKNeighbors(double x, double y, int k, double initialRadius = 100.0)
+    {
+        if (_vectorQuery == null || !_isInitialized) return Array.Empty<int>();
+
+        // HNSW-accelerated KNN — single call, pre-sorted by Euclidean distance
+        var queryPoint = new float[] { (float)x, (float)y };
+        var result = _vectorQuery.NearestTo(queryPoint, k, columnNames: "n");
+
+        var ids = new int[result.Count];
+        for (int i = 0; i < result.Count; i++)
+            ids[i] = (int)Convert.ToInt64(result[i].Metadata!["n"]);
+        return ids;
+    }
+
+    /// <summary>
+    /// Nearest-prime query: Find the single closest prime to (x, y).
+    /// Uses HNSW vector search — one call, no bounding box needed.
     /// </summary>
     [JSInvokable("SharcGetNearestPrime")]
     public static int SharcGetNearestPrime(double x, double y, double maxDist)
     {
-        if (_spatialJit == null || !_isInitialized) return -1;
+        if (_vectorQuery == null || !_isInitialized) return -1;
 
-        // JitQuery: ClearFilters resets accumulated state, Where chains AND predicates.
-        // Reuses compiled filter nodes — no SharcFilter[] allocation per call.
-        _spatialJit.ClearFilters()
-            .Where(FilterStar.Column("x").Gte(x - maxDist))
-            .Where(FilterStar.Column("x").Lte(x + maxDist))
-            .Where(FilterStar.Column("y").Gte(y - maxDist))
-            .Where(FilterStar.Column("y").Lte(y + maxDist));
+        // HNSW-accelerated nearest-neighbor lookup (k=1)
+        var queryPoint = new float[] { (float)x, (float)y };
+        var result = _vectorQuery.NearestTo(queryPoint, k: 1, columnNames: "n");
 
-        using var reader = _spatialJit.Query("n", "x", "y");
+        if (result.Count == 0) return -1;
 
-        int nearestId = -1;
-        double minDistSq = maxDist * maxDist;
+        // Check distance threshold (result.Distance is Euclidean distance)
+        if (result[0].Distance > (float)maxDist) return -1;
 
-        while (reader.Read())
-        {
-            double px = reader.GetDouble(1);
-            double py = reader.GetDouble(2);
-            double dx = px - x;
-            double dy = py - y;
-            double distSq = dx * dx + dy * dy;
-
-            if (distSq < minDistSq)
-            {
-                minDistSq = distSq;
-                nearestId = (int)reader.GetInt64(0);
-            }
-        }
-
-        return nearestId;
+        return (int)Convert.ToInt64(result[0].Metadata!["n"]);
     }
 
     /// <summary>
@@ -352,7 +388,7 @@ public static class SharcPrimeStore
             initMs = Math.Round(_initMs, 1),
             scanMs = Math.Round(sw.Elapsed.TotalMilliseconds, 2),
             tableCount = _db.Schema.Tables.Count,
-            version = "Sharc 1.1.2-beta"
+            version = "Sharc 1.1.6-rc1 (Vector)"
         };
     }
 
@@ -392,5 +428,39 @@ public static class SharcPrimeStore
         double avgNs = sw.Elapsed.TotalMilliseconds * 1_000_000.0 / iterations;
         return $"[Sharc PreparedReader Seek] {iterations} lookups: {sw.Elapsed.TotalMilliseconds:F2}ms " +
                $"(avg {avgNs:F0}ns/op), hits: {hits}/{iterations}";
+    }
+
+    /// <summary>
+    /// Timed HNSW KNN benchmark: Measure Sharc.Vector HNSW-accelerated KNN.
+    /// </summary>
+    [JSInvokable("SharcBenchmarkKNN")]
+    public static string SharcBenchmarkKNN(int iterations, int k)
+    {
+        if (_vectorQuery == null || !_isInitialized)
+            return "Error: Sharc not initialized";
+
+        var rand = new Random(42);
+        double range = Math.Sqrt(_maxNumber); 
+
+        // Warm up
+        for (int i = 0; i < 5; i++)
+        {
+            double rx = (rand.NextDouble() * 2 - 1) * range;
+            double ry = (rand.NextDouble() * 2 - 1) * range;
+            SharcGetKNeighbors(rx, ry, k);
+        }
+
+        var sw = Stopwatch.StartNew();
+        for (int i = 0; i < iterations; i++)
+        {
+            double rx = (rand.NextDouble() * 2 - 1) * range;
+            double ry = (rand.NextDouble() * 2 - 1) * range;
+            SharcGetKNeighbors(rx, ry, k);
+        }
+        sw.Stop();
+
+        double avgMs = sw.Elapsed.TotalMilliseconds / iterations;
+        return $"[Sharc HNSW KNN (k={k})] {iterations} searches: {sw.Elapsed.TotalMilliseconds:F2}ms " +
+               $"(avg {avgMs:F2}ms/op)";
     }
 }

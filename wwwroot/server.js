@@ -1,6 +1,7 @@
 const http = require('http');
 const fs = require('fs');
 const path = require('path');
+const { validateWebAssets } = require('../tools/validate_web_assets');
 
 function log(msg) {
     console.log(msg);
@@ -10,6 +11,23 @@ function log(msg) {
 if (fs.existsSync('server.log')) fs.unlinkSync('server.log');
 
 const port = 8081;
+
+function enforceGuardrails() {
+    const projectRoot = path.join(__dirname, '..');
+    const result = validateWebAssets({ projectRoot });
+
+    if (!result.ok) {
+        console.error('[Guardrails] Web asset validation failed. Refusing to start server.');
+        for (const err of result.errors) {
+            console.error(`  - ${err}`);
+        }
+        process.exit(1);
+    }
+
+    console.log('[Guardrails] Web asset validation passed.');
+}
+
+enforceGuardrails();
 
 const mimeTypes = {
     '.html': 'text/html',

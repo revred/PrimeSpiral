@@ -15,8 +15,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Sharc" Version="1.1.2-beta" />
-    <PackageReference Include="Sharc.Graph" Version="1.1.2-beta" />
+    <PackageReference Include="Sharc" Version="1.1.6-rc1" />
+    <PackageReference Include="Sharc.Graph" Version="1.1.6-rc1" />
+    <PackageReference Include="Sharc.Vector" Version="1.1.6-rc1" />
   </ItemGroup>
 
   <!-- Preserve Sharc assemblies from IL trimmer (accessed via JSInterop reflection) -->
@@ -28,6 +29,7 @@
     <TrimmerRootAssembly Include="Sharc.Query" />
     <TrimmerRootAssembly Include="Sharc.Graph" />
     <TrimmerRootAssembly Include="Sharc.Graph.Surface" />
+    <TrimmerRootAssembly Include="Sharc.Vector" />
     <TrimmerRootAssembly Include="System.Runtime.InteropServices.JavaScript" />
     <TrimmerRootAssembly Include="Microsoft.AspNetCore.Components.WebAssembly" />
   </ItemGroup>

@@ -67,6 +67,17 @@ Open:
 
 in any modern browser (Chrome/Edge/Firefox).
 
+## Web Guardrails
+
+Use these commands to avoid stale or broken runtime assets:
+
+- Publish and sync Blazor runtime assets into `wwwroot/`:
+  - `powershell -ExecutionPolicy Bypass -File tools/publish_web.ps1`
+- Validate web assets without publishing:
+  - `node tools/validate_web_assets.js`
+
+`wwwroot/server.js` now enforces this validation at startup and will refuse to run if guardrails fail.
+
 ## Controls
 
 - Mouse Wheel: Zoom
