@@ -21,7 +21,7 @@ This engine renders **2,000,000 points** at **60 FPS** using a sophisticated thr
 -   **`spike.html`**: The main entry point for the browser-based visualization.
 -   **`spiral.js`**: The core application logic (Rendering, Spatial Grid, Auto-LOD).
 -   **`Sharp.Benchmark/`**: C# Console App for algorithmic regression testing.
--   **`Sharp.Tests/`**: C# NUnit Project using Playwright for E2E browser verification.
+-   **`Sharp.Tests/`**: C# xUnit project using Playwright for E2E browser verification.
 -   **`Sharp.Strategy/`**: Strategic documentation and automation plans.
 
 ## 📊 Performance Benchmarks (C# Verification)

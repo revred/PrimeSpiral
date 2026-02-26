@@ -1,12 +1,10 @@
 ﻿using System.Text.RegularExpressions;
 using Microsoft.Playwright;
-using Microsoft.Playwright.NUnit;
-using NUnit.Framework;
+using Microsoft.Playwright.Xunit;
+using Xunit;
 
 namespace Sharp.Tests
 {
-    [Parallelizable(ParallelScope.Self)]
-    [TestFixture]
     public class PerformanceTests : PageTest
     {
         private string GetSpikeHtmlPath()
@@ -18,7 +16,7 @@ namespace Sharp.Tests
             return "file:///C:/Code/PrimeSpiral/index.html";
         }
 
-        [Test]
+        [Fact]
         public async Task Startup_Should_Be_Fast()
         {
             await Page.GotoAsync(GetSpikeHtmlPath());
@@ -31,7 +29,7 @@ namespace Sharp.Tests
             await Expect(loading).ToBeHiddenAsync(new LocatorAssertionsToBeHiddenOptions { Timeout = 10000 });
         }
 
-        [Test]
+        [Fact]
         public async Task AutoLOD_Should_Switch_Strategies()
         {
             await Page.GotoAsync(GetSpikeHtmlPath());
@@ -48,7 +46,7 @@ namespace Sharp.Tests
 
             var strategy = Page.Locator("#disp-strategy");
             var text = await strategy.InnerTextAsync();
-            Assert.That(text, Does.Contain("PIXEL"));
+            Assert.Contains("PIXEL", text);
 
             // 2. Zoom In (Scroll Up) -> Less nodes -> Vector Mode
             for(int i=0; i<60; i++)
@@ -59,10 +57,10 @@ namespace Sharp.Tests
             await Page.WaitForTimeoutAsync(500);
             
             text = await strategy.InnerTextAsync();
-            Assert.That(text, Does.Contain("VECTOR"));
+            Assert.Contains("VECTOR", text);
         }
 
-        [Test]
+        [Fact]
         public async Task FPS_Should_Be_Stable()
         {
             await Page.GotoAsync(GetSpikeHtmlPath());
@@ -87,17 +85,16 @@ namespace Sharp.Tests
                 });
             }");
 
-            TestContext.WriteLine($"Measured FPS: {fps}");
-            TestContext.WriteLine($"Measured FPS: {fps}");
-            Assert.That(fps, Is.GreaterThan(30));
+            Console.WriteLine($"Measured FPS: {fps}");
+            Assert.True(fps > 30, $"Expected FPS > 30 but got {fps}");
         }
 
-        [Test]
+        [Fact]
         public async Task Profile_Should_Identify_Bottlenecks() 
         {
             // Subscribe to console messages to account for startup crashes
-            Page.Console += (_, msg) => TestContext.WriteLine($"Browser Console: {msg.Text}");
-            Page.PageError += (_, str) => TestContext.WriteLine($"Browser Error: {str}");
+            Page.Console += (_, msg) => Console.WriteLine($"Browser Console: {msg.Text}");
+            Page.PageError += (_, str) => Console.WriteLine($"Browser Error: {str}");
 
             await Page.GotoAsync(GetSpikeHtmlPath());
             
@@ -107,7 +104,7 @@ namespace Sharp.Tests
                 await Expect(Page.Locator("#loading")).ToBeHiddenAsync(new LocatorAssertionsToBeHiddenOptions { Timeout = 5000 });
             } catch {
                  var crashError = await Page.EvaluateAsync<string>("() => window.lastError");
-                 TestContext.WriteLine($"Startup Failed. JS Error: {crashError}");
+                 Console.WriteLine($"Startup Failed. JS Error: {crashError}");
                  throw;
             }
 
@@ -136,14 +133,14 @@ namespace Sharp.Tests
             var jsError = await Page.EvaluateAsync<string>("() => window.lastError");
             if(!string.IsNullOrEmpty(jsError))
             {
-                TestContext.WriteLine($"JS Error Detected: {jsError}");
+                Console.WriteLine($"JS Error Detected: {jsError}");
                 Assert.Fail($"JS Error: {jsError}");
             }
             
-            TestContext.WriteLine("--- Profile Results ---");
+            Console.WriteLine("--- Profile Results ---");
             foreach(var kvp in data) 
             {
-                TestContext.WriteLine($"{kvp.Key}: {kvp.Value:F3}ms");
+                Console.WriteLine($"{kvp.Key}: {kvp.Value:F3}ms");
             }
             
             // Serialize to file for agent reading
@@ -157,15 +154,15 @@ namespace Sharp.Tests
             // or 50FPS (20ms).
             if(data.ContainsKey("RenderPixel")) 
             {
-                Assert.That(data["RenderPixel"], Is.LessThan(33.0), "RenderPixel should be < 33ms (30FPS)");
-                TestContext.WriteLine($"RenderPixel Time: {data["RenderPixel"]}ms");
+                Assert.True(data["RenderPixel"] < 33.0, $"RenderPixel should be < 33ms (30FPS), got {data["RenderPixel"]}ms");
+                Console.WriteLine($"RenderPixel Time: {data["RenderPixel"]}ms");
             }
             
             // GridQuery should be negligible in Pixel Mode because it's not strictly used for rendering, 
             // but it IS ran for auto-lod check.
             if(data.ContainsKey("GridQuery"))
             {
-                Assert.That(data["GridQuery"], Is.LessThan(1.0), "GridQuery should be extremely fast");
+                Assert.True(data["GridQuery"] < 1.0, $"GridQuery should be extremely fast, got {data["GridQuery"]}ms");
             }
         }
     }

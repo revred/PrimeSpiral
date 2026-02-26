@@ -1,12 +1,10 @@
 using System.Text.Json;
 using Microsoft.Playwright;
-using Microsoft.Playwright.NUnit;
-using NUnit.Framework;
+using Microsoft.Playwright.Xunit;
+using Xunit;
 
 namespace Sharp.Tests
 {
-    [Parallelizable(ParallelScope.Self)]
-    [TestFixture]
     public class VisualTests : PageTest
     {
         private string GetSpikeHtmlPath()
@@ -34,7 +32,7 @@ namespace Sharp.Tests
             await Page.WaitForTimeoutAsync(1000); // Settle
         }
 
-        [Test]
+        [Fact]
         public async Task SeamDetection_Test()
         {
             await WaitForAppReady();
@@ -48,21 +46,21 @@ namespace Sharp.Tests
             await Page.WaitForTimeoutAsync(1000);
 
             var state = await GetState();
-            TestContext.WriteLine($"Scale: {state.Scale}, Visible: {state.Visible}, Strategy: {state.Strategy}");
+            Console.WriteLine($"Scale: {state.Scale}, Visible: {state.Visible}, Strategy: {state.Strategy}");
 
             var analysis = await AnalyzeSeams(8); // 8x8 grid
             
-            TestContext.WriteLine($"Max Density Diff: {analysis.MaxDiff}%");
+            Console.WriteLine($"Max Density Diff: {analysis.MaxDiff}%");
             if (analysis.HasSeam)
             {
-                TestContext.WriteLine($"⚠️ SEAM DETECTED at: {analysis.SeamLoc}");
+                Console.WriteLine($"SEAM DETECTED at: {analysis.SeamLoc}");
             }
 
             // Assertion: Seam should be below threshold
-            Assert.That(analysis.MaxDiff, Is.LessThan(15.0), $"Seam detected at {analysis.SeamLoc} with {analysis.MaxDiff}% difference.");
+            Assert.True(analysis.MaxDiff < 15.0, $"Seam detected at {analysis.SeamLoc} with {analysis.MaxDiff}% difference.");
         }
 
-        [Test]
+        [Fact]
         public async Task VisualProgression_Test()
         {
             await WaitForAppReady();
@@ -77,19 +75,19 @@ namespace Sharp.Tests
                 await Page.WaitForTimeoutAsync(100);
 
                 var state = await GetState();
-                if (state.Strategy != prevStrategy)
+                if (!string.IsNullOrEmpty(state.Strategy) && state.Strategy != prevStrategy)
                 {
-                    TestContext.WriteLine($"Strategy Transition at step {i}: {prevStrategy} -> {state.Strategy}");
-                    TestContext.WriteLine($"Scale: {state.Scale}, Visible: {state.Visible}");
+                    Console.WriteLine($"Strategy Transition at step {i}: {prevStrategy} -> {state.Strategy}");
+                    Console.WriteLine($"Scale: {state.Scale}, Visible: {state.Visible}");
                     transitionFound = true;
                     prevStrategy = state.Strategy;
                 }
             }
 
-            Assert.That(transitionFound, Is.True, "Should have transitioned from VECTOR to PIXEL mode during zoom out.");
+            Assert.True(transitionFound, "Should have transitioned from VECTOR to PIXEL mode during zoom out.");
         }
 
-        [Test]
+        [Fact]
         public async Task PanVerification_Test()
         {
             await WaitForAppReady();
@@ -104,7 +102,7 @@ namespace Sharp.Tests
             await Page.WaitForTimeoutAsync(500);
 
             var pannedRight = await GetState();
-            Assert.That(pannedRight.OffsetX, Is.Not.EqualTo(initial.OffsetX), "OffsetX should have changed after panning right.");
+            Assert.NotEqual(initial.OffsetX, pannedRight.OffsetX);
             
             // Pan down
             await Page.Mouse.MoveAsync(640, 360);
@@ -114,10 +112,10 @@ namespace Sharp.Tests
             await Page.WaitForTimeoutAsync(500);
 
             var pannedDown = await GetState();
-            Assert.That(pannedDown.OffsetY, Is.Not.EqualTo(pannedRight.OffsetY), "OffsetY should have changed after panning down.");
+            Assert.NotEqual(pannedRight.OffsetY, pannedDown.OffsetY);
         }
 
-        [Test]
+        [Fact]
         public async Task CornerBoundaries_Test()
         {
             await WaitForAppReady();
@@ -165,11 +163,11 @@ namespace Sharp.Tests
             foreach (var r in cornerAnalysis.EnumerateArray())
             {
                 int count = r.GetProperty("nonBgPixels").GetInt32();
-                string name = r.GetProperty("corner").GetString();
-                TestContext.WriteLine($"Corner {name}: {count} non-bg pixels");
+                string name = r.GetProperty("corner").GetString() ?? "Unknown";
+                Console.WriteLine($"Corner {name}: {count} non-bg pixels");
                 // In massive zoom out, the center might be small, corners should be mostly empty
                 // Allow some small noise if necessary, but 0 is ideal.
-                Assert.That(count, Is.LessThan(200), $"Corner {name} has too many non-background pixels ({count}).");
+                Assert.True(count < 200, $"Corner {name} has too many non-background pixels ({count}).");
             }
         }
 
@@ -179,7 +177,6 @@ namespace Sharp.Tests
                 return {
                     scale: parseFloat(document.getElementById('dbg-zoom')?.innerText || '0'),
                     visible: parseInt((document.getElementById('disp-visible')?.innerText || '0').replace(/,/g, ''), 10),
-                    strategy: document.getElementById('dbg-strategy-val')?.innerText || 'N/A',
                     strategy: document.getElementById('dbg-strategy-val')?.innerText || 'N/A',
                     offsetX: window.camera ? window.camera.renderOffset.x : 0,
                     offsetY: window.camera ? window.camera.renderOffset.y : 0
@@ -258,7 +255,7 @@ namespace Sharp.Tests
         {
             public double Scale { get; set; }
             public int Visible { get; set; }
-            public string Strategy { get; set; }
+            public string? Strategy { get; set; }
             public double OffsetX { get; set; }
             public double OffsetY { get; set; }
         }
@@ -266,7 +263,7 @@ namespace Sharp.Tests
         private class SeamAnalysis
         {
             public double MaxDiff { get; set; }
-            public string SeamLoc { get; set; }
+            public string? SeamLoc { get; set; }
             public bool HasSeam { get; set; }
         }
     }

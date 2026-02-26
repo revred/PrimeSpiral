@@ -11,10 +11,10 @@ The Core Logic (Sieve, Coordinate Math, Spatial Partitioning) is mirrored in `Sh
 - [x] **Benchmark CI Job**: Run `Sharp.Benchmark` (Release Mode).
 - [x] **Threshold Assertions**: Hard-coded limits in `Program.cs` enforce <20ms Sieve and <0.05ms Query.
 
-## 2. Rendering Verification (C# / NUnit)
+## 2. Rendering Verification (C# / xUnit)
 
 ### Context
-We use **NUnit + Microsoft Playwright** in `Sharp.Tests` to verify the application behavior end-to-end. This eliminates the need for Node.js modules or external JS scripts.
+We use **xUnit + Microsoft Playwright** in `Sharp.Tests` to verify the application behavior end-to-end. This eliminates the need for Node.js modules or external JS scripts.
 
 ### Verification Tasks
 - [x] **Frame Analysis**: `PerformanceTests.cs` verifies `FPS > 30` and startup speed.

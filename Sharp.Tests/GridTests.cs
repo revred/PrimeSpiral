@@ -1,11 +1,9 @@
 using Microsoft.Playwright;
-using Microsoft.Playwright.NUnit;
-using NUnit.Framework;
+using Microsoft.Playwright.Xunit;
+using Xunit;
 
 namespace Sharp.Tests
 {
-    [Parallelizable(ParallelScope.Self)]
-    [TestFixture]
     public class GridTests : PageTest
     {
         private string GetTestHtmlPath()
@@ -15,7 +13,7 @@ namespace Sharp.Tests
             return "file:///C:/Code/PrimeSpiral/Sharp.Tests/test_grid.html";
         }
 
-        [Test]
+        [Fact]
         public async Task GridIsolation_Test()
         {
             await Page.GotoAsync(GetTestHtmlPath());
@@ -24,7 +22,7 @@ namespace Sharp.Tests
             await Page.WaitForFunctionAsync("() => window.testStatus !== undefined");
 
             var status = await Page.EvaluateAsync<string>("window.testStatus");
-            Assert.That(status, Is.EqualTo("DONE"), "JS Grid Test failed or did not complete.");
+            Assert.True(status == "DONE", $"JS Grid Test failed or did not complete. Status: {status}");
 
             // Verify visual logs
             var logs = await Page.Locator("#results div").AllTextContentsAsync();

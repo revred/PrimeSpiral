@@ -1,4 +1,4 @@
-<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
+﻿<Project Sdk="Microsoft.NET.Sdk.BlazorWebAssembly">
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
@@ -15,9 +15,9 @@
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="Sharc" Version="1.2.59" />
-    <PackageReference Include="Sharc.Graph" Version="1.2.59" />
-    <PackageReference Include="Sharc.Vector" Version="1.2.59" />
+    <PackageReference Include="Sharc" Version="1.2.69" />
+    <PackageReference Include="Sharc.Graph" Version="1.2.69" />
+    <PackageReference Include="Sharc.Vector" Version="1.2.69" />
   </ItemGroup>
 
   <!-- Preserve Sharc assemblies from IL trimmer (accessed via JSInterop reflection) -->
@@ -35,3 +35,4 @@
   </ItemGroup>
 
 </Project>
+
