@@ -17,6 +17,7 @@
   <ItemGroup>
     <PackageReference Include="Sharc" Version="1.2.69" />
     <PackageReference Include="Sharc.Graph" Version="1.2.69" />
+    <PackageReference Include="Sharc.Query" Version="1.2.69" />
     <PackageReference Include="Sharc.Vector" Version="1.2.69" />
   </ItemGroup>
 
